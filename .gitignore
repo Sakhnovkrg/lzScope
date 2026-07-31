@@ -1,0 +1,26 @@
+# --- Lazarus / Free Pascal build artifacts ---
+lib/
+backup/
+*.ppu
+*.o
+*.a
+*.or
+*.rst
+*.compiled
+*.dbg
+*.lps
+
+# --- binaries ---
+*.exe
+*.dll
+*.clap
+
+# --- editor/IDE leftovers ---
+*.bak
+*.bak2
+*.~*
+fpcdebug.txt
+
+# --- OS noise ---
+Thumbs.db
+Desktop.ini
