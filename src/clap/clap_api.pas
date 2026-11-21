@@ -1,8 +1,6 @@
 unit clap_api;
 
-{ CLAP API translation, ABI-compatible with the clap-1.2.x C headers.
-  Covers what this plugin needs: entry, factory, plugin lifecycle,
-  events, and the audio-ports/params/state/gui extensions. }
+{ CLAP API translation (clap-1.2.x), only what this plugin needs }
 
 {$mode objfpc}{$H+}
 {$packrecords c}
@@ -33,7 +31,7 @@ const
 
   CLAP_INVALID_ID = High(UInt32);
 
-  { event space and event types (clap/events.h) }
+  { events }
   CLAP_CORE_EVENT_SPACE_ID = 0;
 
   CLAP_EVENT_NOTE_ON             = 0;
@@ -46,6 +44,8 @@ const
   CLAP_EVENT_PARAM_GESTURE_BEGIN = 7;
   CLAP_EVENT_PARAM_GESTURE_END   = 8;
   CLAP_EVENT_TRANSPORT           = 9;
+
+  CLAP_TRANSPORT_IS_PLAYING = 1 shl 4;
   CLAP_EVENT_MIDI                = 10;
   CLAP_EVENT_MIDI_SYSEX          = 11;
   CLAP_EVENT_MIDI2               = 12;
@@ -117,6 +117,13 @@ type
     param_id: TClapId;
   end;
 
+  { leading part of clap_event_transport }
+  PClapEventTransport = ^TClapEventTransport;
+  TClapEventTransport = record
+    header: TClapEventHeader;
+    flags: UInt32;
+  end;
+
   PClapInputEvents = ^TClapInputEvents;
   TClapInputEvents = record
     ctx: Pointer;
@@ -143,7 +150,7 @@ type
   TClapProcess = record
     steady_time: Int64;
     frames_count: UInt32;
-    transport: Pointer;   { clap_event_transport*, unused here }
+    transport: PClapEventTransport;   { may be nil }
     audio_inputs: PClapAudioBuffer;
     audio_outputs: PClapAudioBuffer;
     audio_inputs_count: UInt32;
@@ -193,7 +200,7 @@ type
     get_factory: function(factory_id: PAnsiChar): Pointer; cdecl;
   end;
 
-  { --- extension: audio-ports --- }
+  { audio-ports }
 
   PClapAudioPortInfo = ^TClapAudioPortInfo;
   TClapAudioPortInfo = record
@@ -212,7 +219,7 @@ type
                   info: PClapAudioPortInfo): Boolean; cdecl;
   end;
 
-  { --- extension: params --- }
+  { params }
 
   PClapParamInfo = ^TClapParamInfo;
   TClapParamInfo = record
@@ -239,7 +246,7 @@ type
                      output: PClapOutputEvents); cdecl;
   end;
 
-  { host side of the params extension (same CLAP_EXT_PARAMS id) }
+  { host side of params }
   PClapHostParams = ^TClapHostParams;
   TClapHostParams = record
     rescan: procedure(host: PClapHost; flags: UInt32); cdecl;
@@ -247,7 +254,12 @@ type
     request_flush: procedure(host: PClapHost); cdecl;
   end;
 
-  { --- extension: state --- }
+  PClapHostState = ^TClapHostState;
+  TClapHostState = record
+    mark_dirty: procedure(host: PClapHost); cdecl;
+  end;
+
+  { state }
 
   PClapIStream = ^TClapIStream;
   TClapIStream = record
@@ -267,12 +279,12 @@ type
     load: function(plugin: PClapPlugin; stream: PClapIStream): Boolean; cdecl;
   end;
 
-  { --- extension: gui --- }
+  { gui }
 
   PClapWindow = ^TClapWindow;
   TClapWindow = record
     api: PAnsiChar;
-    handle: Pointer;   { C union of cocoa/x11/win32, all pointer-sized }
+    handle: Pointer;   { C union, pointer-sized }
   end;
 
   PClapGuiResizeHints = ^TClapGuiResizeHints;

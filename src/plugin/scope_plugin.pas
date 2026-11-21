@@ -29,11 +29,15 @@ uses
   SysUtils, scope_state, scope_dsp, scope_gui;
 
 const
-  STATE_MAGIC = $4C5A5030; { 'LZP0' }
+  STATE_MAGIC_V0 = $4C5A5030; { 'LZP0': PARAM_COUNT_V0 doubles }
+  STATE_MAGIC    = $4C5A5031; { 'LZP1': UInt32 count, then count doubles }
+  PARAM_COUNT_V0 = 4;
+  STATE_MAX_PARAMS = 1024;
 
-{ ------------------------------------------------------------------ }
-{ descriptor                                                          }
-{ ------------------------------------------------------------------ }
+var
+  InitCount: LongInt = 0;
+
+{ descriptor }
 
 const
   ScopeFeatures: array[0..3] of PAnsiChar =
@@ -55,9 +59,7 @@ const
 
   WIN32_API_NAME: PAnsiChar = CLAP_WINDOW_API_WIN32;
 
-{ ------------------------------------------------------------------ }
-{ extension: audio-ports                                              }
-{ ------------------------------------------------------------------ }
+{ audio-ports }
 
 function AudioPortsCount(plugin: PClapPlugin; is_input: Boolean): UInt32; cdecl;
 begin
@@ -75,7 +77,7 @@ begin
   info^.flags := CLAP_AUDIO_PORT_IS_MAIN;
   info^.channel_count := 2;
   info^.port_type := CLAP_PORT_STEREO;
-  info^.in_place_pair := CLAP_INVALID_ID;
+  info^.in_place_pair := 0;   { in-place allowed }
   Result := True;
 end;
 
@@ -85,9 +87,7 @@ const
     get: @AudioPortsGet
   );
 
-{ ------------------------------------------------------------------ }
-{ extension: params                                                   }
-{ ------------------------------------------------------------------ }
+{ params }
 
 function ParamsCount(plugin: PClapPlugin): UInt32; cdecl;
 begin
@@ -119,7 +119,7 @@ begin
   Result := False;
   idx := ParamIndex(param_id);
   if idx < 0 then Exit;
-  out_value^ := PScopeInstance(plugin^.plugin_data)^.params[idx];
+  out_value^ := GetParam(PScopeInstance(plugin^.plugin_data), idx);
   Result := True;
 end;
 
@@ -227,6 +227,7 @@ begin
   Result := True;
 end;
 
+{ never runs alongside process() }
 procedure ParamsFlush(plugin: PClapPlugin; input: PClapInputEvents;
   output: PClapOutputEvents); cdecl;
 var
@@ -244,8 +245,7 @@ begin
       Inc(i);
     end;
   end;
-  { covers GUI changes while the host is not calling process() }
-  DrainParamQueue(inst, output);
+  ReportDirtyParams(inst, output);
 end;
 
 const
@@ -258,37 +258,86 @@ const
     flush: @ParamsFlush
   );
 
-{ ------------------------------------------------------------------ }
-{ extension: state                                                    }
-{ ------------------------------------------------------------------ }
+{ state }
+
+{ streams may move fewer bytes than asked }
+function WriteAll(stream: PClapOStream; buf: PByte; size: UInt64): Boolean;
+var
+  n: Int64;
+begin
+  while size > 0 do
+  begin
+    n := stream^.write(stream, buf, size);
+    if n <= 0 then Exit(False);
+    Inc(buf, n);
+    Dec(size, n);
+  end;
+  Result := True;
+end;
+
+function ReadAll(stream: PClapIStream; buf: PByte; size: UInt64): Boolean;
+var
+  n: Int64;
+begin
+  while size > 0 do
+  begin
+    n := stream^.read(stream, buf, size);
+    if n <= 0 then Exit(False);
+    Inc(buf, n);
+    Dec(size, n);
+  end;
+  Result := True;
+end;
 
 function StateSave(plugin: PClapPlugin; stream: PClapOStream): Boolean; cdecl;
 var
   inst: PScopeInstance;
-  magic: UInt32;
+  hdr: array[0..1] of UInt32;
+  vals: array[0..PARAM_COUNT - 1] of Double;
+  i: Integer;
 begin
-  Result := False;
   inst := PScopeInstance(plugin^.plugin_data);
-  magic := STATE_MAGIC;
-  if stream^.write(stream, @magic, SizeOf(magic)) <> SizeOf(magic) then Exit;
-  Result := stream^.write(stream, @inst^.params[0],
-    PARAM_COUNT * SizeOf(Double)) = PARAM_COUNT * SizeOf(Double);
+  hdr[0] := STATE_MAGIC;
+  hdr[1] := PARAM_COUNT;
+  for i := 0 to PARAM_COUNT - 1 do
+    vals[i] := GetParam(inst, i);
+  Result := WriteAll(stream, @hdr[0], SizeOf(hdr)) and
+    WriteAll(stream, @vals[0], SizeOf(vals));
 end;
 
 function StateLoad(plugin: PClapPlugin; stream: PClapIStream): Boolean; cdecl;
 var
   inst: PScopeInstance;
-  magic: UInt32;
+  magic, count, i: UInt32;
   vals: array[0..PARAM_COUNT - 1] of Double;
-  i: Integer;
+  v: Double;
 begin
   Result := False;
   inst := PScopeInstance(plugin^.plugin_data);
-  if stream^.read(stream, @magic, SizeOf(magic)) <> SizeOf(magic) then Exit;
-  if magic <> STATE_MAGIC then Exit;
-  if stream^.read(stream, @vals[0], SizeOf(vals)) <> SizeOf(vals) then Exit;
+  if not ReadAll(stream, @magic, SizeOf(magic)) then Exit;
+  if magic = STATE_MAGIC_V0 then
+    count := PARAM_COUNT_V0
+  else if magic = STATE_MAGIC then
+  begin
+    if not ReadAll(stream, @count, SizeOf(count)) then Exit;
+    if count > STATE_MAX_PARAMS then Exit;
+  end
+  else
+    Exit;
+
+  { missing params keep defaults, extra ones are ignored }
   for i := 0 to PARAM_COUNT - 1 do
-    inst^.params[i] := ClampParam(i, vals[i]);
+    vals[i] := ParamDefs[i].defV;
+  i := 0;
+  while i < count do
+  begin
+    if not ReadAll(stream, @v, SizeOf(v)) then Exit;
+    if i < PARAM_COUNT then vals[i] := v;
+    Inc(i);
+  end;
+  { apply only if everything was read }
+  for i := 0 to PARAM_COUNT - 1 do
+    SetParam(inst, i, ClampParam(i, vals[i]));
   Result := True;
 end;
 
@@ -298,9 +347,7 @@ const
     load: @StateLoad
   );
 
-{ ------------------------------------------------------------------ }
-{ extension: gui                                                      }
-{ ------------------------------------------------------------------ }
+{ gui }
 
 function GuiExtIsApiSupported(plugin: PClapPlugin; api: PAnsiChar;
   is_floating: Boolean): Boolean; cdecl;
@@ -417,9 +464,7 @@ const
     hide: @GuiExtHide
   );
 
-{ ------------------------------------------------------------------ }
-{ plugin core                                                         }
-{ ------------------------------------------------------------------ }
+{ plugin core }
 
 function PlugInit(plugin: PClapPlugin): Boolean; cdecl;
 var
@@ -427,8 +472,12 @@ var
 begin
   inst := PScopeInstance(plugin^.plugin_data);
   if (inst^.host <> nil) and (inst^.host^.get_extension <> nil) then
+  begin
     inst^.hostParams := PClapHostParams(
       inst^.host^.get_extension(inst^.host, CLAP_EXT_PARAMS));
+    inst^.hostState := PClapHostState(
+      inst^.host^.get_extension(inst^.host, CLAP_EXT_STATE));
+  end;
   Result := True;
 end;
 
@@ -447,13 +496,12 @@ end;
 function PlugActivate(plugin: PClapPlugin; sample_rate: Double;
   min_frames, max_frames: UInt32): Boolean; cdecl;
 begin
-  ScopeConfigure(PScopeInstance(plugin^.plugin_data), sample_rate);
-  Result := True;
+  Result := ScopeConfigure(PScopeInstance(plugin^.plugin_data), sample_rate);
 end;
 
 procedure PlugDeactivate(plugin: PClapPlugin); cdecl;
 begin
-  { keep the buffers, an open GUI still shows the last capture }
+  { keep the buffers: an open GUI still shows the last capture }
 end;
 
 function PlugStartProcessing(plugin: PClapPlugin): Boolean; cdecl;
@@ -493,9 +541,7 @@ procedure PlugOnMainThread(plugin: PClapPlugin); cdecl;
 begin
 end;
 
-{ ------------------------------------------------------------------ }
-{ factory                                                             }
-{ ------------------------------------------------------------------ }
+{ factory }
 
 function FactoryGetPluginCount(factory: PClapPluginFactory): UInt32; cdecl;
 begin
@@ -520,11 +566,12 @@ begin
   if (plugin_id = nil) or (StrComp(plugin_id, ScopeDescriptor.id) <> 0) then
     Exit;
   New(inst);
+  if inst = nil then Exit;
   FillChar(inst^, SizeOf(inst^), 0);
   System.InitCriticalSection(inst^.lock);
   inst^.host := host;
   inst^.srate := 48000.0;
-  inst^.guiScale := 0.0;   { 0 = host never called set_scale, use OS DPI }
+  inst^.guiScale := 0.0;   { 0 = use OS DPI }
   ResetParams(inst);
 
   inst^.plug.desc := @ScopeDescriptor;
@@ -549,18 +596,21 @@ const
     create_plugin: @FactoryCreatePlugin
   );
 
-{ ------------------------------------------------------------------ }
-{ entry                                                               }
-{ ------------------------------------------------------------------ }
+{ entry }
 
+{ init/deinit may be called more than once }
 function EntryInit(plugin_path: PAnsiChar): Boolean; cdecl;
 begin
+  { out of memory returns nil instead of raising into the host }
+  ReturnNilIfGrowHeapFails := True;
+  InterlockedIncrement(InitCount);
   Result := True;
 end;
 
 procedure EntryDeinit; cdecl;
 begin
-  GuiGlobalCleanup;
+  if InterlockedDecrement(InitCount) = 0 then
+    GuiGlobalCleanup;
 end;
 
 function EntryGetFactory(factory_id: PAnsiChar): Pointer; cdecl;

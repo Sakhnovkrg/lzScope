@@ -1,8 +1,6 @@
 unit scope_shader;
 
-{ GLSL support: loads the GL 2.0 entry points at runtime and wraps
-  compile/use/uniforms. On drivers without shaders everything no-ops
-  and CompileFragmentProgram returns 0. Shader sources live here too. }
+{ GLSL helpers; everything no-ops on drivers without shaders }
 
 {$mode objfpc}{$H+}
 
@@ -12,8 +10,7 @@ uses
   Windows, gl_min;
 
 const
-  { about overlay: re-sample the grabbed scene with distorted UVs (the
-    scope bends and flows) + rainbow plasma glow. `k` eases in. }
+  { about overlay: warped scene + plasma glow }
   PLASMA_FS: PAnsiChar =
     'uniform float t;'#10 +
     'uniform float k;'#10 +
@@ -38,7 +35,7 @@ const
     '  gl_FragColor=vec4(mix(scn,col,k),1.0);'#10 +
     '}';
 
-{ fragment-only program, fixed-function vertex path; 0 on failure }
+{ 0 on failure }
 function CompileFragmentProgram(src: PAnsiChar): DWORD;
 procedure DeleteShaderProgram(prog: DWORD);
 procedure UseShaderProgram(prog: DWORD);
@@ -50,7 +47,8 @@ procedure SetUniform1i(loc: LongInt; v: LongInt);
 implementation
 
 var
-  Loaded: Boolean = False;
+  { 0 = not loaded, 1 = loading, 2 = done }
+  LoadState: LongInt = 0;
   OK: Boolean = False;
   pglCreateShader: TglCreateShader;
   pglShaderSource: TglShaderSource;
@@ -70,8 +68,13 @@ var
 
 procedure LoadFuncs;
 begin
-  if Loaded then Exit;
-  Loaded := True;
+  if LoadState = 2 then Exit;
+  if InterlockedCompareExchange(LoadState, 1, 0) <> 0 then
+  begin
+    while LoadState <> 2 do
+      Sleep(0);
+    Exit;
+  end;
   pglCreateShader := TglCreateShader(wglGetProcAddress('glCreateShader'));
   pglShaderSource := TglShaderSource(wglGetProcAddress('glShaderSource'));
   pglCompileShader := TglCompileShader(wglGetProcAddress('glCompileShader'));
@@ -96,6 +99,7 @@ begin
     (pglUniform1f <> nil) and (pglUniform2f <> nil) and
     (pglUniform1i <> nil) and
     (pglDeleteShader <> nil) and (pglDeleteProgram <> nil);
+  InterlockedExchange(LoadState, 2);
 end;
 
 function CompileFragmentProgram(src: PAnsiChar): DWORD;

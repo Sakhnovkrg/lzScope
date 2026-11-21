@@ -85,6 +85,14 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
+        <Filename Value="src\dsp\scope_ring.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src\dsp\scope_view.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
         <Filename Value="src\gui\gl_min.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
@@ -93,11 +101,19 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
-        <Filename Value="src\gui\scope_view.pas"/>
+        <Filename Value="src\gui\scope_gui.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
-        <Filename Value="src\gui\scope_gui.pas"/>
+        <Filename Value="src\gui\scope_gui_types.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src\gui\scope_gui_text.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src\gui\scope_gui_render.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>

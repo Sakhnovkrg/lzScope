@@ -1,7 +1,6 @@
 unit gl_min;
 
-{ Minimal OpenGL 1.1 + WGL bindings, just what the renderer needs.
-  Self-contained so there is no dependency on the FPC OpenGL package. }
+{ Minimal OpenGL 1.1 + WGL bindings }
 
 {$mode objfpc}{$H+}
 
@@ -27,8 +26,11 @@ const
   GL_SRC_ALPHA        = $0302;
   GL_ONE_MINUS_SRC_ALPHA = $0303;
   GL_UNSIGNED_BYTE    = $1401;
+  GL_FLOAT            = $1406;
+  GL_VERTEX_ARRAY     = $8074;
+  GL_COLOR_ARRAY      = $8076;
 
-  { shader objects (GL 2.0, loaded via wglGetProcAddress) }
+  { shaders (GL 2.0) }
   GL_FRAGMENT_SHADER = $8B30;
   GL_VERTEX_SHADER   = $8B31;
   GL_COMPILE_STATUS  = $8B81;
@@ -45,7 +47,7 @@ const
   GL_RGB                = $1907;
   GL_RGBA               = $1908;
 
-  { WGL_ARB_pixel_format attributes (for multisample formats) }
+  { WGL_ARB_pixel_format }
   WGL_DRAW_TO_WINDOW_ARB    = $2001;
   WGL_ACCELERATION_ARB      = $2003;
   WGL_SUPPORT_OPENGL_ARB    = $2010;
@@ -74,7 +76,7 @@ procedure glDisable(cap: DWORD); stdcall; external 'opengl32.dll';
 procedure glBlendFunc(sfactor, dfactor: DWORD); stdcall; external 'opengl32.dll';
 procedure glHint(target, mode: DWORD); stdcall; external 'opengl32.dll';
 
-{ textures (GL 1.1 core — used to grab the scene for the about warp) }
+{ textures }
 procedure glGenTextures(n: LongInt; textures: PDWORD); stdcall; external 'opengl32.dll';
 procedure glDeleteTextures(n: LongInt; textures: PDWORD); stdcall; external 'opengl32.dll';
 procedure glBindTexture(target, texture: DWORD); stdcall; external 'opengl32.dll';
@@ -84,21 +86,22 @@ procedure glTexParameteri(target, pname: DWORD; param: LongInt); stdcall; extern
 procedure glCopyTexSubImage2D(target: DWORD; level, xoffset, yoffset,
   x, y, width, height: LongInt); stdcall; external 'opengl32.dll';
 
-{ display lists + raster text (used with wglUseFontBitmaps) }
-function glGenLists(range: LongInt): DWORD; stdcall; external 'opengl32.dll';
-procedure glDeleteLists(list: DWORD; range: LongInt); stdcall; external 'opengl32.dll';
-procedure glListBase(base: DWORD); stdcall; external 'opengl32.dll';
-procedure glCallLists(n: LongInt; atype: DWORD; lists: Pointer); stdcall; external 'opengl32.dll';
-procedure glRasterPos2f(x, y: Single); stdcall; external 'opengl32.dll';
+{ vertex arrays }
+procedure glEnableClientState(cap: DWORD); stdcall; external 'opengl32.dll';
+procedure glDisableClientState(cap: DWORD); stdcall; external 'opengl32.dll';
+procedure glVertexPointer(size: LongInt; atype: DWORD; stride: LongInt;
+  data: Pointer); stdcall; external 'opengl32.dll';
+procedure glColorPointer(size: LongInt; atype: DWORD; stride: LongInt;
+  data: Pointer); stdcall; external 'opengl32.dll';
+procedure glDrawArrays(mode: DWORD; first, count: LongInt); stdcall; external 'opengl32.dll';
 
 function wglCreateContext(dc: HDC): HGLRC; stdcall; external 'opengl32.dll';
 function wglDeleteContext(rc: HGLRC): BOOL; stdcall; external 'opengl32.dll';
 function wglMakeCurrent(dc: HDC; rc: HGLRC): BOOL; stdcall; external 'opengl32.dll';
 function wglGetProcAddress(name: PAnsiChar): Pointer; stdcall; external 'opengl32.dll';
-function wglUseFontBitmapsW(dc: HDC; first, count, listBase: DWORD): BOOL; stdcall; external 'opengl32.dll';
 
 type
-  { WGL_EXT_swap_control; fetch via wglGetProcAddress with a current context }
+  { WGL_EXT_swap_control }
   TWglSwapIntervalEXT = function(interval: Integer): BOOL; stdcall;
 
   { WGL_ARB_pixel_format }
@@ -106,7 +109,7 @@ type
     pfAttribFList: PSingle; nMaxFormats: UINT; piFormats: PLongInt;
     nNumFormats: PUINT): BOOL; stdcall;
 
-  { GL 2.0 shader entry points (fetch with a current context) }
+  { GL 2.0 shaders }
   TglCreateShader = function(shaderType: DWORD): DWORD; stdcall;
   TglShaderSource = procedure(shader: DWORD; count: LongInt;
     src: PPAnsiChar; lengths: PLongInt); stdcall;

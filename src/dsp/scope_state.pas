@@ -1,11 +1,6 @@
 unit scope_state;
 
-{ Shared instance state: parameter table and the capture ring buffer.
-
-  Audio thread writes bufL/bufR + writePos lock-free; the GUI reads them
-  under `lock`, which only guards reallocation in activate(). The audio
-  thread never takes the lock — the host guarantees activate() and
-  process() don't overlap. }
+{ Shared instance state: params, capture ring, GUI -> host change flags }
 
 {$mode objfpc}{$H+}
 {$packrecords c}
@@ -13,10 +8,10 @@ unit scope_state;
 interface
 
 uses
-  clap_api;
+  clap_api, scope_ring;
 
 const
-  PLUGIN_VERSION = '1.0.0';
+  PLUGIN_VERSION = '1.0.1';
   PLUGIN_AUTHOR  = 'DsgDnB';
   PLUGIN_URL     = 'https://github.com/sakhnovkrg';
 
@@ -36,7 +31,10 @@ const
 
   HIST_SECONDS = 10;   { max view (5 s) + trigger/scrub lookback }
 
-  { logical 96-dpi pixels, scaled by the UI scale at runtime }
+  MIN_SAMPLE_RATE = 1000.0;
+  MAX_SAMPLE_RATE = 1536000.0;
+
+  { at 96 dpi }
   DEFAULT_GUI_W = 800;
   DEFAULT_GUI_H = 360;
   MIN_GUI_W = 200;
@@ -68,44 +66,41 @@ const
      flags: CLAP_PARAM_IS_AUTOMATABLE or CLAP_PARAM_IS_STEPPED)
   );
 
-const
-  PQ_SIZE = 64;   { must be a power of two }
-
 type
-  TParamChange = record
-    id: TClapId;
-    value: Double;
-  end;
-
   PScopeInstance = ^TScopeInstance;
   TScopeInstance = record
     plug: TClapPlugin;           { must stay first }
     host: PClapHost;
     hostParams: PClapHostParams; { may be nil }
-    lock: TRTLCriticalSection;
+    hostState: PClapHostState;   { may be nil }
+    lock: TRTLCriticalSection;   { ring (re)allocation vs readers }
 
     srate: Double;
-    bufL, bufR: PSingle;
-    histSize: UInt32;            { frames per channel, 0 = unallocated }
-    writePos: UInt32;
+    ring: TScopeRing;
 
-    params: array[0..PARAM_COUNT - 1] of Double;
+    paramBits: array[0..PARAM_COUNT - 1] of Int64;  { atomic }
+    dirty: LongInt;              { atomic; bit per param changed by the GUI }
+    wasPlaying: Boolean;         { audio thread }
     guiScale: Double;
     gui: Pointer;                { PScopeGui, owned by scope_gui }
-
-    { GUI -> host param changes, SPSC ring: wndproc pushes, process or
-      flush drains into out_events }
-    pq: array[0..PQ_SIZE - 1] of TParamChange;
-    pqWrite, pqRead: UInt32;
   end;
 
 function ParamIndex(id: TClapId): Integer;
+{ bit test: comparing a NaN can raise }
+function IsNaNValue(v: Double): Boolean;
+{ NaN becomes the default }
 function ClampParam(idx: Integer; v: Double): Double;
 procedure ResetParams(inst: PScopeInstance);
 
-procedure PushParamChange(inst: PScopeInstance; id: TClapId; value: Double);
-function PopParamChange(inst: PScopeInstance; out chg: TParamChange): Boolean;
+{ atomic, any thread }
+function GetParam(inst: PScopeInstance; idx: Integer): Double;
+procedure SetParam(inst: PScopeInstance; idx: Integer; v: Double);
+
+procedure MarkParamDirty(inst: PScopeInstance; idx: Integer);
+function TakeDirtyParams(inst: PScopeInstance): LongInt;
 procedure RequestHostFlush(inst: PScopeInstance);
+{ main thread only }
+procedure MarkHostStateDirty(inst: PScopeInstance);
 
 implementation
 
@@ -117,8 +112,30 @@ begin
     Result := -1;
 end;
 
+{ via pointers: absolute overlays misread register values }
+function DoubleBits(v: Double): Int64;
+begin
+  Result := PInt64(@v)^;
+end;
+
+function BitsDouble(bits: Int64): Double;
+begin
+  Result := PDouble(@bits)^;
+end;
+
+function IsNaNValue(v: Double): Boolean;
+var
+  bits: Int64;
+begin
+  bits := DoubleBits(v);
+  Result := ((bits and $7FF0000000000000) = $7FF0000000000000) and
+    ((bits and $000FFFFFFFFFFFFF) <> 0);
+end;
+
 function ClampParam(idx: Integer; v: Double): Double;
 begin
+  if IsNaNValue(v) then
+    Exit(ParamDefs[idx].defV);
   if v < ParamDefs[idx].minV then v := ParamDefs[idx].minV;
   if v > ParamDefs[idx].maxV then v := ParamDefs[idx].maxV;
   Result := v;
@@ -129,27 +146,35 @@ var
   i: Integer;
 begin
   for i := 0 to PARAM_COUNT - 1 do
-    inst^.params[i] := ParamDefs[i].defV;
+    SetParam(inst, i, ParamDefs[i].defV);
 end;
 
-procedure PushParamChange(inst: PScopeInstance; id: TClapId; value: Double);
+function GetParam(inst: PScopeInstance; idx: Integer): Double;
 var
-  next: UInt32;
+  bits: Int64;
 begin
-  next := (inst^.pqWrite + 1) and (PQ_SIZE - 1);
-  if next = inst^.pqRead then
-    Exit;   { full — drop, host re-syncs via get_value }
-  inst^.pq[inst^.pqWrite].id := id;
-  inst^.pq[inst^.pqWrite].value := value;
-  inst^.pqWrite := next;
+  bits := inst^.paramBits[idx];
+  ReadBarrier;
+  Result := BitsDouble(bits);
 end;
 
-function PopParamChange(inst: PScopeInstance; out chg: TParamChange): Boolean;
+procedure SetParam(inst: PScopeInstance; idx: Integer; v: Double);
 begin
-  Result := inst^.pqRead <> inst^.pqWrite;
-  if not Result then Exit;
-  chg := inst^.pq[inst^.pqRead];
-  inst^.pqRead := (inst^.pqRead + 1) and (PQ_SIZE - 1);
+  InterlockedExchange64(inst^.paramBits[idx], DoubleBits(v));
+end;
+
+procedure MarkParamDirty(inst: PScopeInstance; idx: Integer);
+var
+  old: LongInt;
+begin
+  repeat
+    old := inst^.dirty;
+  until InterlockedCompareExchange(inst^.dirty, old or (1 shl idx), old) = old;
+end;
+
+function TakeDirtyParams(inst: PScopeInstance): LongInt;
+begin
+  Result := InterlockedExchange(inst^.dirty, 0);
 end;
 
 procedure RequestHostFlush(inst: PScopeInstance);
@@ -157,6 +182,13 @@ begin
   if (inst^.hostParams <> nil) and (inst^.hostParams^.request_flush <> nil) and
      (inst^.host <> nil) then
     inst^.hostParams^.request_flush(inst^.host);
+end;
+
+procedure MarkHostStateDirty(inst: PScopeInstance);
+begin
+  if (inst^.hostState <> nil) and (inst^.hostState^.mark_dirty <> nil) and
+     (inst^.host <> nil) then
+    inst^.hostState^.mark_dirty(inst^.host);
 end;
 
 end.
