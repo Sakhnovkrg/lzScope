@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lzScope — CLAP oscilloscope</title>
+<meta name="description" content="lzScope is a free stereo oscilloscope CLAP plugin for Windows, macOS and Linux, written in Free Pascal.">
+<meta property="og:title" content="lzScope — CLAP oscilloscope">
+<meta property="og:description" content="Free stereo oscilloscope plugin for Windows, macOS and Linux.">
+<meta name="theme-color" content="#05050b">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2305050b'/%3E%3Cpath d='M2 16 Q7 2 12 16 T22 16 T32 16' fill='none' stroke='%2380ff80' stroke-width='2.5'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #05050b;
+  --text: #d9d9d9;
+  --dim: #8f8f99;
+  --line: rgba(153, 153, 153, .25);
+  --green: #80ff80;
+  --pink: #ff80ff;
+  --yellow: #ffd933;
+  --red: #d95959;
+  --mono: Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.6 var(--mono);
+  -webkit-text-size-adjust: 100%;
+}
+main { max-width: 992px; margin: 0 auto; padding: 0 16px 64px; }
+a { color: var(--text); text-decoration-color: var(--line); text-underline-offset: 3px; }
+a:hover { color: var(--yellow); }
+h1, h2 { font-weight: normal; margin: 0; }
+
+header { padding: 56px 0 28px; }
+h1 { font-size: 40px; line-height: 1.1; letter-spacing: -1px; color: #fff; }
+h1 .l { color: var(--green); }
+h1 .r { color: var(--pink); }
+.tag { margin: 12px 0 24px; color: var(--dim); max-width: 60ch; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn {
+  display: inline-block;
+  padding: 8px 16px;
+  border: 1px solid rgba(153, 153, 178, .5);
+  text-decoration: none;
+}
+.btn:hover { border-color: var(--yellow); }
+.btn.primary { border-color: var(--green); color: var(--green); }
+.btn.primary:hover { border-color: var(--yellow); color: var(--yellow); }
+
+.shot { display: block; width: 100%; height: auto; }
+.hint { margin: 10px 0 0; color: var(--dim); font-size: 13px; }
+
+section { margin-top: 56px; }
+h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--dim);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
+}
+ul.features { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px 32px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+ul.features li { padding-left: 16px; border-left: 2px solid var(--line); }
+ul.features li:nth-child(odd) { border-left-color: rgba(128, 255, 128, .55); }
+ul.features li:nth-child(even) { border-left-color: rgba(255, 128, 255, .55); }
+ul.features b { display: block; font-weight: normal; color: #fff; }
+ul.features span { color: var(--dim); }
+
+.os { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.os > div { border: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.os > div.mine { border-color: var(--green); }
+.os h3 { margin: 0; font-size: 18px; font-weight: normal; color: #fff; }
+.os p { margin: 0; color: var(--dim); font-size: 13px; }
+.os code { color: var(--text); overflow-wrap: anywhere; }
+.os .btn { margin-top: auto; text-align: center; }
+ol { margin: 20px 0 0; padding-left: 22px; color: var(--dim); }
+ol li + li { margin-top: 6px; }
+
+footer { margin-top: 64px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 24px; }
+footer span { margin-right: auto; }
+
+@media (max-width: 560px) {
+  header { padding-top: 36px; }
+  h1 { font-size: 32px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><span class="l">lz</span><span class="r">Scope</span></h1>
+    <p class="tag">A free stereo oscilloscope plugin in the CLAP format for Windows, macOS and Linux. Small, fast, written entirely in Free Pascal.</p>
+    <div class="actions">
+      <a class="btn primary" id="dl-main" href="https://github.com/Sakhnovkrg/lzScope/releases/latest">Download<span id="ver"></span></a>
+      <a class="btn" href="https://github.com/Sakhnovkrg/lzScope">Source on GitHub</a>
+    </div>
+  </header>
+
+  <!-- the workflow copies preview.png from the repository root; opened from disk it is one folder up -->
+  <img class="shot" src="preview.png" width="1000" height="579" alt="Screenshot of lzScope"
+       onerror="this.onerror=null;this.src='../preview.png'">
+
+  <section>
+    <h2>Features</h2>
+    <ul class="features">
+      <li><b>Stereo waveform</b><span>Left and right channels overlaid, or split into two lanes.</span></li>
+      <li><b>Sync to the host</b><span>The view locks to the song's bars, from 1/4 bar to 8 bars, with a playhead.</span></li>
+      <li><b>Deep zoom</b><span>From 5 seconds down to single samples; level range from -60 to +36 dB.</span></li>
+      <li><b>Trigger modes</b><span>Instant, any, ascending or descending zero crossing.</span></li>
+      <li><b>Hold and scrub</b><span>Freeze the picture, drag back through 20 seconds of history, zoom under the cursor.</span></li>
+      <li><b>Crosshair readout</b><span>Level, time, frequency and per-channel peak at the cursor.</span></li>
+      <li><b>Your defaults</b><span>Save the current settings as the starting point for new instances.</span></li>
+      <li><b>Lightweight</b><span>A single file of about 200 KB, GPU-drawn, sharp at any display scale.</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Download and install</h2>
+    <div class="os">
+      <div data-os="windows">
+        <h3>Windows</h3>
+        <p>7 or later, 64-bit.<br>Copy <code>lzscope.clap</code> to <code>C:\Program Files\Common Files\CLAP</code></p>
+        <a class="btn" href="https://github.com/Sakhnovkrg/lzScope/releases/latest">Download for Windows</a>
+      </div>
+      <div data-os="macos">
+        <h3>macOS</h3>
+        <p>10.13 or later on Intel, 11 or later on Apple Silicon.<br>Copy <code>lzScope.clap</code> to <code>~/Library/Audio/Plug-Ins/CLAP</code></p>
+        <a class="btn" href="https://github.com/Sakhnovkrg/lzScope/releases/latest">Download for macOS</a>
+      </div>
+      <div data-os="linux">
+        <h3>Linux</h3>
+        <p>64-bit x86, glibc 2.34 or later, X11 or XWayland.<br>Copy <code>lzscope.clap</code> to <code>~/.clap</code></p>
+        <a class="btn" href="https://github.com/Sakhnovkrg/lzScope/releases/latest">Download for Linux</a>
+      </div>
+    </div>
+    <ol>
+      <li>Download the zip for your system and unpack it.</li>
+      <li>Copy the plugin into the CLAP folder shown above; create the folder if it is not there.</li>
+      <li>Restart your DAW or rescan plugins. lzScope is listed under the vendor DsgDnB.</li>
+    </ol>
+    <p class="hint">Works in any CLAP host: REAPER, Bitwig Studio, FL Studio and others. Needs OpenGL.</p>
+  </section>
+
+  <footer>
+    <span>lzScope by DsgDnB</span>
+    <a href="https://github.com/Sakhnovkrg/lzScope/blob/main/CHANGELOG.md">Changelog</a>
+    <a href="https://github.com/Sakhnovkrg/lzScope/issues">Report a problem</a>
+    <a href="https://cleveraudio.org/">About CLAP</a>
+  </footer>
+</main>
+
+<script>
+/* release links: direct zips when the GitHub API answers, the releases page otherwise */
+(function () {
+  var ua = navigator.userAgent, os = /Windows/.test(ua) ? 'windows' : /Mac/.test(ua) ? 'macos' : /Linux|X11/.test(ua) && !/Android/.test(ua) ? 'linux' : '';
+  var mine = os && document.querySelector('[data-os="' + os + '"]');
+  if (mine) mine.classList.add('mine');
+  fetch('https://api.github.com/repos/Sakhnovkrg/lzScope/releases/latest')
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (rel) {
+      if (!rel) return;
+      if (rel.tag_name) document.getElementById('ver').textContent = ' ' + rel.tag_name;
+      (rel.assets || []).forEach(function (a) {
+        ['windows', 'macos', 'linux'].forEach(function (k) {
+          if (a.name.slice(-(k.length + 5)) !== '-' + k + '.zip') return;
+          document.querySelector('[data-os="' + k + '"] .btn').href = a.browser_download_url;
+          if (k === os) document.getElementById('dl-main').href = a.browser_download_url;
+        });
+      });
+    })
+    .catch(function () {});
+})();
+</script>
+
+</body>
+</html>
