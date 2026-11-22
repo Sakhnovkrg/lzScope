@@ -22,8 +22,10 @@ const
   HIDDEN_POLL_MS = 30;     { hidden or minimized }
   MAX_IDLE_MS = 500;       { forced redraw interval }
 
-  TrigNamesS: array[0..3] of string[10] =
+  TrigNamesS: array[0..RETRIG_COUNT - 1] of string[10] =
     ('instant', 'any', 'ascending', 'descending');
+  { the longest the status line gets }
+  STATUS_WIDEST = 'len 1/2 bar x999.9  range -60.0dB  trig descending  sync (no tempo)';
 
 type
   TFrame = record
@@ -33,6 +35,8 @@ type
     sc: Single;            { px per unit of amplitude }
     vzoom, viewMs: Double;
     cursorX, cursorY: Integer;
+    colW: Single;          { px per waveform column }
+    vi: TViewInfo;
   end;
 
 { formatting }
@@ -124,10 +128,88 @@ begin
   fh := Round(12 * s);
   if fh < 9 then fh := 9;
   if fh <> g^.fontH then
+  begin
     BuildAtlas(g, fh);
+    { narrowest window that still fits the status line, HOLD and "?" }
+    g^.minW := 0;
+    if g^.atlas.tex <> 0 then
+      g^.minW := Round(TextWidth(g, STATUS_WIDEST) + 96 * s);
+  end;
 end;
 
 { draw passes }
+
+{ sync view: lines on bars and beats, labelled bar.beat from the cycle start }
+procedure DrawBeatGrid(g: PScopeGui; const f: TFrame);
+const
+  Steps: array[0..8] of Double =
+    (1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1);   { beats }
+var
+  bpb, lenBeats, step, p, beat, first, visBeats, labelEnd: Double;
+  i, k, bar, x: Integer;
+  s, s2: ShortString;
+begin
+  bpb := f.vi.beatsPerBar;
+  lenBeats := f.vi.lenBars * bpb;
+  if (bpb <= 0) or (lenBeats <= 0) or (f.vi.zoomSpan <= 0) then Exit;
+  first := f.vi.zoomStart * lenBeats;     { left edge, beats from the cycle start }
+  visBeats := f.vi.zoomSpan * lenBeats;
+
+  { the finest step that keeps the lines apart }
+  step := 0;
+  for i := 0 to High(Steps) + 3 do
+  begin
+    if i <= High(Steps) then
+      p := Steps[i]
+    else
+      p := bpb * (1 shl (i - High(Steps) - 1));   { 1, 2, 4 bars }
+    if f.w * p / visBeats >= 56 * f.px then
+    begin
+      step := p;
+      Break;
+    end;
+  end;
+  if step = 0 then Exit;
+
+  labelEnd := 0;
+  k := Trunc(first / step) + 1;
+  while k * step < first + visBeats - 1e-9 do
+  begin
+    p := k * step;
+    bar := Trunc(p / bpb + 1e-9);
+    beat := p - bar * bpb;
+    x := Round(f.w * (p - first) / visBeats);
+    if beat < 1e-9 then
+      glColor4f(0.6, 0.6, 0.6, 0.38)   { bar line }
+    else
+      glColor4f(0.6, 0.6, 0.6, 0.18);
+    glBegin(GL_LINES);
+    glVertex2f(x, 0); glVertex2f(x, f.h);
+    glEnd;
+
+    if Abs(beat - Round(beat)) < 1e-9 then
+      Str(Round(beat) + 1, s)
+    else
+    begin
+      Str((beat + 1): 0: 3, s);
+      while s[Length(s)] = '0' do
+        SetLength(s, Length(s) - 1);
+    end;
+    if f.vi.lenBars > 1 then
+    begin
+      Str(bar + 1, s2);
+      s := s2 + '.' + s;
+    end;
+    { skip a label that would run into the previous one }
+    if x + 5 * f.px >= labelEnd then
+    begin
+      glColor4f(0.75, 0.75, 0.75, 0.55);
+      DrawTextGL(g, x + 5 * f.px, f.h - 9 * f.px, s);
+      labelEnd := x + 5 * f.px + TextWidth(g, s) + 8 * f.px;
+    end;
+    Inc(k);
+  end;
+end;
 
 procedure DrawGrid(g: PScopeGui; const f: TFrame);
 var
@@ -166,6 +248,26 @@ begin
       ly := a - 20 * f.px;
     end;
     v := Floor(v / 3 - 1) * 3;
+  end;
+
+  { 0 dBFS threshold, when the range reaches above it }
+  if f.vzoom > 0 then
+  begin
+    a := f.sc;
+    glColor4f(1.0, 0.3, 0.3, 0.75);
+    glBegin(GL_LINES);
+    glVertex2f(0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
+    glVertex2f(0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
+    glEnd;
+    FormatDb(0, s);
+    DrawTextGL(g, 8 * f.px, f.yCent - a - 5 * f.px, s);
+    DrawTextGL(g, 8 * f.px, f.yCent + a + g^.fontH + 4, s);
+  end;
+
+  if f.vi.sweep then
+  begin
+    DrawBeatGrid(g, f);
+    Exit;
   end;
 
   { time grid, from the right edge }
@@ -214,10 +316,10 @@ begin
   v := @g^.verts[0];
   for x := 0 to cols - 1 do
   begin
-    v^.x := x + 0.5; v^.y := f.yCent;
+    v^.x := (x + 0.5) * f.colW; v^.y := f.yCent;
     v^.r := r; v^.g := gr; v^.b := b; v^.a := 0.04;
     Inc(v);
-    v^.x := x + 0.5; v^.y := ToY(maxs[x]);
+    v^.x := (x + 0.5) * f.colW; v^.y := ToY(maxs[x]);
     v^.r := r; v^.g := gr; v^.b := b; v^.a := 0.26;
     Inc(v);
   end;
@@ -266,13 +368,33 @@ var
   s: ShortString;
   seg: array[0..ST_COUNT - 1] of ShortString;
   r: TStatusRect;
+  syncOn: Boolean;
 begin
   trig := Round(ClampParam(PARAM_RETRIG, GetParam(g^.inst, PARAM_RETRIG)));
-  FormatTime(f.viewMs, s);
+  syncOn := GetParam(g^.inst, PARAM_SYNC) >= 0.5;
+  if syncOn then
+  begin
+    { in bars whenever sync is on, even before the host's tempo is known }
+    i := Round(ClampParam(PARAM_SYNC_LEN, GetParam(g^.inst, PARAM_SYNC_LEN)));
+    if f.vi.sync then i := f.vi.syncLen;
+    s := SyncLenNames[i];
+    if f.vi.sweep and (f.vi.zoomSpan < 0.999) then
+    begin
+      Str((1 / f.vi.zoomSpan): 0: 1, seg[ST_LEN]);
+      s := s + ' x' + seg[ST_LEN];
+    end;
+  end
+  else
+    FormatTime(f.viewMs, s);
   seg[ST_LEN] := 'len ' + s;
   FormatDb(f.vzoom, s);
   seg[ST_RANGE] := 'range ' + s;
   seg[ST_TRIG] := 'trig ' + TrigNamesS[trig];
+  seg[ST_SYNC] := 'sync';
+  { only once the host has processed a block: before that the tempo is
+    simply not known yet }
+  if syncOn and (not f.vi.sync) and (g^.inst^.syncSeq <> 0) then
+    seg[ST_SYNC] := 'sync (no tempo)';
 
   { dragged or hovered item is highlighted }
   hot := g^.statusDrag;
@@ -292,6 +414,10 @@ begin
     g^.statusRects[i] := r;
     if i = hot then
       glColor4f(1.0, 0.85, 0.2, 1.0)
+    else if (i = ST_SYNC) and syncOn then
+      glColor4f(1.0, 1.0, 1.0, 1.0)
+    else if (i = ST_SYNC) or ((i = ST_TRIG) and syncOn) then
+      glColor4f(0.6, 0.6, 0.6, 0.7)   { off, or not in effect }
     else
       glColor4f(0.85, 0.85, 0.85, 0.8);
     DrawTextGL(g, x, y, seg[i]);
@@ -490,7 +616,8 @@ end;
 procedure RenderFrame(g: PScopeGui; const key: TFrameKey);
 var
   f: TFrame;
-  anchor: Double;
+  x: Single;
+  nCols: Integer;
 begin
   f.w := key.w;
   f.h := key.h;
@@ -500,8 +627,20 @@ begin
   f.cursorX := key.cursorX;
   f.cursorY := key.cursorY;
 
-  BuildColumns(g^.inst, key.holdOffs, f.w, g^.cols, anchor);
-  g^.lastAnchorOffs := anchor;
+  g^.view.zoomStart := key.zoomStart;
+  g^.view.zoomSpan := key.zoomSpan;
+  if key.zoomSpan <= 0 then
+  begin
+    g^.view.zoomStart := 0;
+    g^.view.zoomSpan := 1;
+  end;
+  { one column per 96-dpi pixel: the trace looks the same at any UI scale }
+  nCols := Round(f.w / f.px);
+  if nCols < 2 then nCols := 2;
+  f.colW := f.w / nCols;
+  BuildColumns(g^.inst, key.holdOffs, nCols, g^.cols, g^.view, f.vi);
+  g^.lastAnchorOffs := f.vi.anchorOffs;
+  g^.viewInfo := f.vi;
 
   glViewport(0, 0, f.w, f.h);
   glClearColor(0.02, 0.02, 0.045, 1.0);
@@ -522,6 +661,8 @@ begin
   if f.scopeH < 10 then f.scopeH := 10;
   f.vzoom := ClampParam(PARAM_VZOOM_DB, GetParam(g^.inst, PARAM_VZOOM_DB));
   f.viewMs := ClampParam(PARAM_VIEW_MS, GetParam(g^.inst, PARAM_VIEW_MS));
+  if f.vi.sync and (g^.inst^.srate > 0) then
+    f.viewMs := f.vi.viewSamples * 1000.0 / g^.inst^.srate;
   f.sc := Exp(-f.vzoom * LN10_OVER_20) * f.scopeH;
 
   DrawGrid(g, f);
@@ -531,6 +672,15 @@ begin
       0.5, 1.0, 0.5);               { left:  green }
     DrawChannel(g, g^.cols.minR, g^.cols.maxR, g^.cols.count, f,
       1.0, 0.5, 1.0);               { right: magenta }
+  end;
+  if f.vi.sweep and (f.vi.playhead >= 0) then
+  begin
+    { playhead }
+    x := Round(f.vi.playhead * f.w) + 0.5;
+    glColor4f(1.0, 1.0, 1.0, 0.45);
+    glBegin(GL_LINES);
+    glVertex2f(x, 0); glVertex2f(x, f.h);
+    glEnd;
   end;
   DrawStatus(g, f);
 
@@ -563,6 +713,9 @@ begin
   key.fontH := g^.fontH;
   key.about := Ord(g^.aboutOpen);
   key.statusDrag := g^.statusDrag;
+  key.syncSeq := g^.inst^.syncSeq;
+  key.zoomStart := g^.zoomStart;
+  key.zoomSpan := g^.zoomSpan;
   key.cursorX := -1;
   key.cursorY := -1;
   if (key.about = 0) and GetCursorPos(cp{%H-}) then

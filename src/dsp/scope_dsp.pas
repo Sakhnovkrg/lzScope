@@ -52,7 +52,38 @@ begin
   RingClear(inst^.ring);
 end;
 
-{ starting playback releases hold }
+{ where the song is at ring frame `frame`, for the sync view }
+procedure PublishTransport(inst: PScopeInstance; t: PClapEventTransport;
+  frame: Int64);
+const
+  NEED = CLAP_TRANSPORT_HAS_TEMPO or CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
+var
+  s: TSyncInfo;
+  beats: Double;
+begin
+  FillChar(s, SizeOf(s), 0);
+  if (t <> nil) and ((t^.flags and NEED) = NEED) and
+     (not IsNaNValue(t^.tempo)) and (t^.tempo >= 1.0) and (t^.tempo <= 10000.0) then
+  begin
+    s.valid := True;
+    s.playing := (t^.flags and CLAP_TRANSPORT_IS_PLAYING) <> 0;
+    s.frame := frame;
+    beats := t^.song_pos_beats / CLAP_BEATTIME_FACTOR;
+    s.beatsPerBar := 4.0;
+    s.bars := beats / 4.0;
+    if ((t^.flags and CLAP_TRANSPORT_HAS_TIME_SIGNATURE) <> 0) and
+       (t^.tsig_num > 0) and (t^.tsig_denom > 0) then
+    begin
+      s.beatsPerBar := t^.tsig_num * 4.0 / t^.tsig_denom;
+      s.bars := t^.bar_number +
+        (beats - t^.bar_start / CLAP_BEATTIME_FACTOR) / s.beatsPerBar;
+    end;
+    s.samplesPerBar := inst^.srate * 60.0 / t^.tempo * s.beatsPerBar;
+  end;
+  PublishSync(inst, s);
+end;
+
+{ starting playback releases hold; stopping in sync mode engages it }
 procedure NoteTransport(inst: PScopeInstance; flags: UInt32);
 var
   playing: Boolean;
@@ -62,6 +93,14 @@ begin
      (GetParam(inst, PARAM_HOLD) >= 0.5) then
   begin
     SetParam(inst, PARAM_HOLD, 0.0);
+    MarkParamDirty(inst, PARAM_HOLD);
+  end;
+  { stopping in sync mode holds, so the last cycle stays on screen }
+  if (not playing) and inst^.wasPlaying and inst^.sync.valid and
+     (GetParam(inst, PARAM_SYNC) >= 0.5) and
+     (GetParam(inst, PARAM_HOLD) < 0.5) then
+  begin
+    SetParam(inst, PARAM_HOLD, 1.0);
     MarkParamDirty(inst, PARAM_HOLD);
   end;
   inst^.wasPlaying := playing;
@@ -189,6 +228,8 @@ begin
     srcR := inb^.data32[1]
   else
     srcR := srcL;
+  { the transport describes the first frame of this block }
+  PublishTransport(inst, p^.transport, inst^.ring.framesWritten);
   RingWrite(inst^.ring, srcL, srcR, n);
 end;
 

@@ -15,6 +15,9 @@ procedure GuiDestroy(inst: PScopeInstance);
 function GuiSetParent(inst: PScopeInstance; parentHandle: Pointer): Boolean;
 function GuiGetSize(inst: PScopeInstance; outW, outH: PUInt32): Boolean;
 function GuiSetSize(inst: PScopeInstance; w, h: UInt32): Boolean;
+function GuiSetScale(inst: PScopeInstance; scale: Double): Boolean;
+{ clamps to what the editor can show at its UI scale }
+procedure GuiAdjustSize(inst: PScopeInstance; var w, h: UInt32);
 function GuiShow(inst: PScopeInstance): Boolean;
 function GuiHide(inst: PScopeInstance): Boolean;
 procedure GuiGlobalCleanup;
@@ -58,7 +61,74 @@ end;
 procedure CycleTrigger(inst: PScopeInstance);
 begin
   ApplyGuiParam(inst, PARAM_RETRIG,
-    (Round(GetParam(inst, PARAM_RETRIG)) + 1) mod 4);
+    (Round(GetParam(inst, PARAM_RETRIG)) + 1) mod RETRIG_COUNT);
+end;
+
+{ a new cycle length starts unzoomed }
+function SyncOn(g: PScopeGui): Boolean;
+begin
+  Result := GetParam(g^.inst, PARAM_SYNC) >= 0.5;
+end;
+
+procedure ToggleSync(g: PScopeGui);
+begin
+  g^.zoomStart := 0;
+  g^.zoomSpan := 0;
+  if GetParam(g^.inst, PARAM_SYNC) >= 0.5 then
+    ApplyGuiParam(g^.inst, PARAM_SYNC, 0.0)
+  else
+    ApplyGuiParam(g^.inst, PARAM_SYNC, 1.0);
+end;
+
+procedure StepSyncLen(g: PScopeGui; delta: Integer);
+begin
+  g^.zoomStart := 0;
+  g^.zoomSpan := 0;
+  ApplyGuiParam(g^.inst, PARAM_SYNC_LEN,
+    Round(GetParam(g^.inst, PARAM_SYNC_LEN)) + delta);
+end;
+
+{ turns accumulated movement into whole steps of the sync length }
+procedure StepSyncBy(g: PScopeGui; var accum: Integer; unitSize: Integer);
+begin
+  while accum >= unitSize do
+  begin
+    StepSyncLen(g, 1);
+    Dec(accum, unitSize);
+  end;
+  while accum <= -unitSize do
+  begin
+    StepSyncLen(g, -1);
+    Inc(accum, unitSize);
+  end;
+end;
+
+{ synced cycle: zoom around the cursor, out to the whole cycle at most }
+procedure ZoomSync(g: PScopeGui; delta: Integer; fx: Double);
+var
+  span, start, newSpan, minSpan, under: Double;
+begin
+  span := g^.zoomSpan;
+  start := g^.zoomStart;
+  if (span <= 0) or (span > 1) then
+  begin
+    span := 1;
+    start := 0;
+  end;
+  if (delta < 0) and (span >= 1 - 1e-9) then
+    Exit;
+  minSpan := 1;
+  if g^.viewInfo.viewSamples > 0 then
+    minSpan := SYNC_MIN_SAMPLES / g^.viewInfo.viewSamples;
+  newSpan := span * Exp(-delta * WHEEL_ZOOM_RATE);
+  if newSpan < minSpan then newSpan := minSpan;
+  if newSpan > 1 - 1e-9 then newSpan := 1;
+  under := start + fx * span;
+  start := under - fx * newSpan;
+  if start < 0 then start := 0;
+  if start > 1 - newSpan then start := 1 - newSpan;
+  g^.zoomStart := start;
+  g^.zoomSpan := newSpan;
 end;
 
 { up = larger value }
@@ -66,6 +136,7 @@ procedure HandleStatusDrag(g: PScopeGui; y: Integer);
 const
   LEN_RATE = 0.01;    { x2.7 per 100 px }
   RANGE_DB = 0.25;    { dB per px }
+  SYNC_STEP_PX = 18;
 var
   dy: Integer;
 begin
@@ -74,8 +145,14 @@ begin
   g^.statusLastY := y;
   case g^.statusDrag of
     ST_LEN:
-      ApplyGuiParam(g^.inst, PARAM_VIEW_MS,
-        GetParam(g^.inst, PARAM_VIEW_MS) * Exp(dy * LEN_RATE));
+      if SyncOn(g) then
+      begin
+        Inc(g^.statusAccum, dy);
+        StepSyncBy(g, g^.statusAccum, SYNC_STEP_PX);
+      end
+      else
+        ApplyGuiParam(g^.inst, PARAM_VIEW_MS,
+          GetParam(g^.inst, PARAM_VIEW_MS) * Exp(dy * LEN_RATE));
     ST_RANGE:
       ApplyGuiParam(g^.inst, PARAM_VZOOM_DB,
         GetParam(g^.inst, PARAM_VZOOM_DB) + dy * RANGE_DB);
@@ -84,7 +161,14 @@ end;
 
 procedure HandleStatusPress(g: PScopeGui; item, y: Integer; dbl: Boolean);
 begin
-  if dbl and (item = ST_LEN) then
+  g^.statusAccum := 0;
+  if dbl and (item = ST_LEN) and SyncOn(g) then
+  begin
+    g^.zoomStart := 0;
+    g^.zoomSpan := 0;
+    ApplyGuiParam(g^.inst, PARAM_SYNC_LEN, ParamDefs[PARAM_SYNC_LEN].defV);
+  end
+  else if dbl and (item = ST_LEN) then
     ApplyGuiParam(g^.inst, PARAM_VIEW_MS, ParamDefs[PARAM_VIEW_MS].defV)
   else if dbl and (item = ST_RANGE) then
     ApplyGuiParam(g^.inst, PARAM_VZOOM_DB, ParamDefs[PARAM_VZOOM_DB].defV)
@@ -119,9 +203,23 @@ begin
     g^.moved := True;
   dx := x - g^.dragLastX;
   g^.dragLastX := x;
-  if (dx = 0) or (GetParam(inst, PARAM_HOLD) < 0.5) or (g^.w < 1) then
+  if (dx = 0) or (g^.w < 1) then
     Exit;
-  vs := ViewSampleCount(inst);
+  if g^.viewInfo.sweep then
+  begin
+    { synced cycle: drag moves the zoomed part }
+    if (g^.zoomSpan > 0) and (g^.zoomSpan < 1) then
+    begin
+      g^.zoomStart := g^.zoomStart - dx / g^.w * g^.zoomSpan;
+      if g^.zoomStart < 0 then g^.zoomStart := 0;
+      if g^.zoomStart > 1 - g^.zoomSpan then g^.zoomStart := 1 - g^.zoomSpan;
+    end;
+    Exit;
+  end;
+  if GetParam(inst, PARAM_HOLD) < 0.5 then
+    Exit;
+  vs := g^.viewInfo.viewSamples;
+  if vs <= 0 then vs := ViewSampleCount(inst);
   perPixel := vs / g^.w;
   maxOffs := HoldReach(inst, vs, g^.w);
   g^.holdOffs := g^.holdOffs + dx * perPixel;
@@ -140,6 +238,18 @@ begin
   delta := SmallInt((wp shr 16) and $FFFF);
   if (wp and MK_CONTROL) <> 0 then
     ApplyVZoom(inst, GetParam(inst, PARAM_VZOOM_DB) - delta * (3.0 / 120.0))
+  else if g^.viewInfo.sweep and (g^.w > 0) then
+  begin
+    pt.x := SmallInt(lp and $FFFF);
+    pt.y := SmallInt((lp shr 16) and $FFFF);
+    ScreenToClient(g^.wnd, pt);
+    frac := pt.x / g^.w;
+    if frac < 0 then frac := 0;
+    if frac > 1 then frac := 1;
+    ZoomSync(g, delta, frac);
+  end
+  else if SyncOn(g) then
+    { no cycle on screen to zoom into; the length is set with len }
   else
   begin
     newMs := ClampParam(PARAM_VIEW_MS,
@@ -213,7 +323,7 @@ begin
               SetCursor(LoadCursor(0, IDC_SIZENS));
               Exit(1);
             end;
-          ST_TRIG:
+          ST_TRIG, ST_SYNC:
             begin
               SetCursor(LoadCursor(0, IDC_HAND));
               Exit(1);
@@ -261,8 +371,12 @@ begin
         item := g^.statusDrag;
         g^.statusDrag := ST_NONE;
         ReleaseCapture;
-        if (item = ST_TRIG) and (StatusItemAt(g, mx, my) = ST_TRIG) then
-          CycleTrigger(g^.inst);
+        { trig and sync act on a click: released on the same item }
+        if StatusItemAt(g, mx, my) = item then
+          case item of
+            ST_TRIG: CycleTrigger(g^.inst);
+            ST_SYNC: ToggleSync(g);
+          end;
         Exit(0);
       end
       else if (g <> nil) and g^.pressed then
@@ -561,9 +675,49 @@ begin
   if g = nil then Exit;
   g^.w := Integer(w);
   g^.h := Integer(h);
+  g^.sized := True;
   SetWindowPos(g^.wnd, 0, 0, 0, g^.w, g^.h,
     SWP_NOZORDER or SWP_NOACTIVATE or SWP_NOMOVE);
   Result := True;
+end;
+
+function GuiSetScale(inst: PScopeInstance; scale: Double): Boolean;
+var
+  g: PScopeGui;
+begin
+  inst^.guiScale := scale;
+  g := PScopeGui(inst^.gui);
+  { hosts set the scale after create: redo the default size for it }
+  if (g <> nil) and (not g^.sized) then
+  begin
+    g^.scale := EffectiveScale(inst, g^.wnd);
+    g^.w := Round(DEFAULT_GUI_W * g^.scale);
+    g^.h := Round(DEFAULT_GUI_H * g^.scale);
+    SetWindowPos(g^.wnd, 0, 0, 0, g^.w, g^.h,
+      SWP_NOZORDER or SWP_NOACTIVATE or SWP_NOMOVE);
+  end;
+  Result := True;
+end;
+
+procedure GuiAdjustSize(inst: PScopeInstance; var w, h: UInt32);
+var
+  g: PScopeGui;
+  sc: Single;
+  minW, minH: UInt32;
+begin
+  g := PScopeGui(inst^.gui);
+  if g <> nil then
+    sc := EffectiveScale(inst, g^.wnd)
+  else
+    sc := EffectiveScale(inst, 0);
+  minW := Round(MIN_GUI_W * sc);
+  if (g <> nil) and (g^.minW > 0) then
+    minW := g^.minW;
+  minH := Round(MIN_GUI_H * sc);
+  if w < minW then w := minW;
+  if h < minH then h := minH;
+  if w > MAX_GUI_W then w := MAX_GUI_W;
+  if h > MAX_GUI_H then h := MAX_GUI_H;
 end;
 
 function GuiShow(inst: PScopeInstance): Boolean;

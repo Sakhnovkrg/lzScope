@@ -23,6 +23,10 @@ var
   GEventCount: UInt32 = 0;
   GInteractive: Boolean = False;
   GRunning: Boolean = True;
+  GUseTransport: Boolean = False;   { feed a playing 120 bpm transport }
+  GStartSync: Boolean = False;
+  GScale: Double = 0;
+  GFmt: TFormatSettings;
   GGuiExt: PClapPluginGui = nil;   { interactive mode only }
   GPlug: PClapPlugin = nil;
 
@@ -301,6 +305,18 @@ begin
   SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(xTrig, sy + Round(150 * scale)));
   if ParamNow(PARAM_RETRIG) <> 1.0 then Fail('status: release off trig still clicked');
   if ParamNow(PARAM_HOLD) >= 0.5 then Fail('status: release off trig toggled hold');
+
+  { sync: the item right of trig toggles on a click }
+  x := xTrig;
+  while (x < Round(700 * scale)) and (ParamNow(PARAM_SYNC) = 0.0) do
+  begin
+    MouseClick(x, sy);
+    Inc(x, 6);
+  end;
+  if ParamNow(PARAM_SYNC) <> 1.0 then Fail('status: sync does not respond to clicks');
+  MouseClick(x - 6, sy);
+  if ParamNow(PARAM_SYNC) <> 0.0 then Fail('status: second click should turn sync off');
+  if ParamNow(PARAM_HOLD) >= 0.5 then Fail('status: clicking sync toggled hold');
   SetParamNow(PARAM_RETRIG, 0.0);
 
   { len: up = longer }
@@ -319,6 +335,52 @@ begin
   SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(400, Round(200 * scale)));
   if ParamNow(PARAM_HOLD) >= 0.5 then Fail('double click should toggle hold twice');
 
+  { sync: with a host transport, len picks the number of bars instead }
+  GUseTransport := True;
+  SetParamNow(PARAM_SYNC, 1.0);
+  for x := 1 to 20 do
+  begin
+    ProcessSineBlock;
+    Sleep(10);
+  end;
+  v0 := ParamNow(PARAM_VIEW_MS);
+  if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT then Fail('sync: default length');
+  MouseDrag(xLen, sy, 0, -40);   { two steps of 18 px }
+  if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT + 2 then
+    Fail(Format('sync: len drag gave index %.0f', [ParamNow(PARAM_SYNC_LEN)]));
+  SendMessageW(childWnd, WM_LBUTTONDBLCLK, MK_LBUTTON, MouseLP(xLen, sy));
+  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(xLen, sy));
+  if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT then Fail('sync: double click did not reset the length');
+  { the wheel zooms inside the cycle and never changes its length }
+  SendMessageW(childWnd, WM_MOUSEWHEEL, WPARAM(120) shl 16, 0);
+  for x := 1 to 4 do
+    SendMessageW(childWnd, WM_MOUSEWHEEL, WPARAM((-120 and $FFFF) shl 16), 0);
+  if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT then Fail('sync: the wheel changed the length');
+
+  if ParamNow(PARAM_VIEW_MS) <> v0 then Fail('sync: view size changed while synced');
+  if not paramsExt^.value_to_text(plug, PARAM_SYNC_LEN, 4.0, @txt[0], SizeOf(txt)) or
+     (StrComp(PAnsiChar(@txt[0]), '4 bars') <> 0) then
+    Fail('sync: length text');
+  { no transport: len still sets the length in bars }
+  GUseTransport := False;
+  for x := 1 to 10 do
+  begin
+    ProcessSineBlock;
+    Sleep(10);
+  end;
+  MouseDrag(xLen, sy, 0, -20);
+  if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT + 1 then
+    Fail('sync: len should set bars without a host tempo too');
+  if ParamNow(PARAM_VIEW_MS) <> v0 then Fail('sync: view size changed without a host tempo');
+  SendMessageW(childWnd, WM_LBUTTONDBLCLK, MK_LBUTTON, MouseLP(xLen, sy));
+  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(xLen, sy));
+  SetParamNow(PARAM_SYNC, 0.0);
+  for x := 1 to 10 do
+  begin
+    ProcessSineBlock;
+    Sleep(10);
+  end;
+
   SetParamNow(PARAM_VIEW_MS, 50.0);
   WriteLn('status line controls: ok');
 end;
@@ -335,11 +397,39 @@ begin
   end;
 end;
 
+var
+  GTransport: TClapEventTransport;
+  GSongFrames: Int64 = 0;
+
+{ 120 bpm, 4/4, playing }
+procedure UpdateTransport;
+var
+  beats: Double;
+begin
+  FillChar(GTransport, SizeOf(GTransport), 0);
+  beats := GSongFrames / (SRATE * 60.0 / 120.0);
+  GTransport.flags := CLAP_TRANSPORT_HAS_TEMPO or CLAP_TRANSPORT_HAS_BEATS_TIMELINE or
+    CLAP_TRANSPORT_HAS_TIME_SIGNATURE or CLAP_TRANSPORT_IS_PLAYING;
+  GTransport.song_pos_beats := Round(beats * CLAP_BEATTIME_FACTOR);
+  GTransport.bar_number := Trunc(beats / 4);
+  GTransport.bar_start := Round(GTransport.bar_number * 4.0 * CLAP_BEATTIME_FACTOR);
+  GTransport.tempo := 120.0;
+  GTransport.tsig_num := 4;
+  GTransport.tsig_denom := 4;
+  Inc(GSongFrames, NFRAMES);
+end;
+
 procedure ProcessSineBlock;
 var
   k: Integer;
   ampL: Double;
 begin
+  proc.transport := nil;
+  if GUseTransport then
+  begin
+    UpdateTransport;
+    proc.transport := @GTransport;
+  end;
   { 220 Hz + slow AM on the left, 330 Hz with vibrato on the right }
   for k := 0 to NFRAMES - 1 do
   begin
@@ -368,6 +458,15 @@ end;
 begin
   GInteractive := (ParamCount > 0) and
     ((ParamStr(1) = '-i') or (ParamStr(1) = '--interactive'));
+  { -i extras: --sync starts in sync mode, -s N sets the UI scale }
+  GFmt := DefaultFormatSettings;
+  GFmt.DecimalSeparator := '.';
+  for i := 2 to ParamCount do
+  begin
+    if ParamStr(i) = '--sync' then GStartSync := True;
+    if (ParamStr(i) = '-s') and (i < ParamCount) then
+      GScale := StrToFloatDef(ParamStr(i + 1), 0, GFmt);
+  end;
 
   if not GInteractive then
   begin
@@ -529,6 +628,8 @@ begin
   if RegisterClassW(wc) = 0 then Fail('RegisterClassW');
 
   if not guiExt^.create(plug, CLAP_WINDOW_API_WIN32, False) then Fail('gui.create');
+  { the order hosts use: create, set_scale, get_size }
+  if GScale > 0 then guiExt^.set_scale(plug, GScale);
   if not guiExt^.get_size(plug, @gw, @gh) then Fail('gui.get_size');
   WriteLn(Format('gui size: %dx%d', [gw, gh]));
 
@@ -548,6 +649,12 @@ begin
   if GInteractive then
   begin
     WriteLn('interactive mode: close the window to exit');
+    GUseTransport := True;
+    if GStartSync then
+    begin
+      SendParam(PARAM_SYNC, 1.0);
+      ProcessSineBlock;
+    end;
     GPlug := plug;
     GGuiExt := guiExt;
 

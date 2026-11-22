@@ -20,7 +20,8 @@ const
   ST_LEN   = 0;
   ST_RANGE = 1;
   ST_TRIG  = 2;
-  ST_COUNT = 3;
+  ST_SYNC  = 3;
+  ST_COUNT = 4;
 
 type
   TStatusRect = record
@@ -54,6 +55,8 @@ type
     cursorX, cursorY: Integer;   { -1 = outside }
     about: LongInt;
     statusDrag: LongInt;
+    syncSeq: LongInt;
+    zoomStart, zoomSpan: Double;
   end;
 
   PScopeGui = ^TScopeGui;
@@ -63,6 +66,8 @@ type
     dc: HDC;
     glrc: HGLRC;
     w, h: Integer;
+    sized: Boolean;          { the host has set a size }
+    minW: Integer;           { px the status line needs, 0 = not measured }
     stop: LongBool;
     redraw: LongInt;         { atomic; redraw requested }
     thread: TThreadID;
@@ -79,6 +84,10 @@ type
     statusRects: array[0..ST_COUNT - 1] of TStatusRect;
     statusDrag: LongInt;     { pressed item or ST_NONE }
     statusLastY: Integer;
+    statusAccum: Integer;    { px dragged towards the next sync length }
+    zoomStart, zoomSpan: Double;   { part of a synced cycle on screen; span 0 = all }
+    view: TViewState;        { render thread }
+    viewInfo: TViewInfo;     { last frame, read by the wndproc }
     aboutOpen: Boolean;
     aboutT0: QWord;
     plasmaProg: DWORD;       { 0 = no GLSL }

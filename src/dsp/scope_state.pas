@@ -11,7 +11,7 @@ uses
   clap_api, scope_ring;
 
 const
-  PLUGIN_VERSION = '1.0.1';
+  PLUGIN_VERSION = '1.1.0';
   PLUGIN_AUTHOR  = 'DsgDnB';
   PLUGIN_URL     = 'https://github.com/sakhnovkrg';
 
@@ -19,17 +19,28 @@ const
   PARAM_VZOOM_DB = 1;
   PARAM_RETRIG   = 2;
   PARAM_HOLD     = 3;
-  PARAM_COUNT    = 4;
+  PARAM_SYNC_LEN = 4;
+  PARAM_SYNC     = 5;   { view locked to the host's bars }
+  PARAM_COUNT    = 6;
 
   RETRIG_INSTANT = 0;
   RETRIG_ANY     = 1;
   RETRIG_ASC     = 2;
   RETRIG_DESC    = 3;
+  RETRIG_COUNT   = 4;
 
-  RetrigNames: array[0..3] of PAnsiChar =
+  RetrigNames: array[0..RETRIG_COUNT - 1] of PAnsiChar =
     ('instant', 'any', 'ascending', 'descending');
 
-  HIST_SECONDS = 10;   { max view (5 s) + trigger/scrub lookback }
+  { view length in sync mode, in bars }
+  SYNC_LEN_COUNT   = 6;
+  SYNC_LEN_DEFAULT = 2;
+  SyncLenNames: array[0..SYNC_LEN_COUNT - 1] of PAnsiChar =
+    ('1/4 bar', '1/2 bar', '1 bar', '2 bars', '4 bars', '8 bars');
+  SyncLenBars: array[0..SYNC_LEN_COUNT - 1] of Double =
+    (0.25, 0.5, 1.0, 2.0, 4.0, 8.0);
+
+  HIST_SECONDS = 20;   { 8 bars down to 98 bpm, 4 bars down to 49 }
 
   MIN_SAMPLE_RATE = 1000.0;
   MAX_SAMPLE_RATE = 1536000.0;
@@ -37,7 +48,7 @@ const
   { at 96 dpi }
   DEFAULT_GUI_W = 800;
   DEFAULT_GUI_H = 360;
-  MIN_GUI_W = 200;
+  MIN_GUI_W = 540;   { until the status line has been measured }
   MIN_GUI_H = 120;
   MAX_GUI_W = 8192;
   MAX_GUI_H = 8192;
@@ -59,14 +70,30 @@ const
      minV: -60.0; maxV: 36.0;   defV: 0.0;
      flags: CLAP_PARAM_IS_AUTOMATABLE),
     (id: PARAM_RETRIG;   name: 'Retrigger';
-     minV: 0.0;   maxV: 3.0;    defV: 0.0;
+     minV: 0.0;   maxV: RETRIG_COUNT - 1; defV: 0.0;
      flags: CLAP_PARAM_IS_AUTOMATABLE or CLAP_PARAM_IS_STEPPED),
     (id: PARAM_HOLD;     name: 'Hold';
+     minV: 0.0;   maxV: 1.0;    defV: 0.0;
+     flags: CLAP_PARAM_IS_AUTOMATABLE or CLAP_PARAM_IS_STEPPED),
+    (id: PARAM_SYNC_LEN; name: 'Sync Length';
+     minV: 0.0;   maxV: SYNC_LEN_COUNT - 1; defV: SYNC_LEN_DEFAULT;
+     flags: CLAP_PARAM_IS_AUTOMATABLE or CLAP_PARAM_IS_STEPPED),
+    (id: PARAM_SYNC;     name: 'Sync';
      minV: 0.0;   maxV: 1.0;    defV: 0.0;
      flags: CLAP_PARAM_IS_AUTOMATABLE or CLAP_PARAM_IS_STEPPED)
   );
 
 type
+  { host transport at one ring frame, published by the audio thread }
+  TSyncInfo = record
+    valid: Boolean;      { host gives tempo and position }
+    playing: Boolean;
+    frame: Int64;        { ring frame the position refers to }
+    bars: Double;        { song position at that frame, in bars }
+    samplesPerBar: Double;
+    beatsPerBar: Double;
+  end;
+
   PScopeInstance = ^TScopeInstance;
   TScopeInstance = record
     plug: TClapPlugin;           { must stay first }
@@ -81,6 +108,8 @@ type
     paramBits: array[0..PARAM_COUNT - 1] of Int64;  { atomic }
     dirty: LongInt;              { atomic; bit per param changed by the GUI }
     wasPlaying: Boolean;         { audio thread }
+    syncSeq: LongInt;            { atomic; odd while sync is being written }
+    sync: TSyncInfo;
     guiScale: Double;
     gui: Pointer;                { PScopeGui, owned by scope_gui }
   end;
@@ -101,6 +130,11 @@ function TakeDirtyParams(inst: PScopeInstance): LongInt;
 procedure RequestHostFlush(inst: PScopeInstance);
 { main thread only }
 procedure MarkHostStateDirty(inst: PScopeInstance);
+
+{ audio thread }
+procedure PublishSync(inst: PScopeInstance; const s: TSyncInfo);
+{ any thread; False = no consistent copy, treat as not valid }
+function ReadSync(inst: PScopeInstance; out s: TSyncInfo): Boolean;
 
 implementation
 
@@ -189,6 +223,31 @@ begin
   if (inst^.hostState <> nil) and (inst^.hostState^.mark_dirty <> nil) and
      (inst^.host <> nil) then
     inst^.hostState^.mark_dirty(inst^.host);
+end;
+
+procedure PublishSync(inst: PScopeInstance; const s: TSyncInfo);
+begin
+  InterlockedIncrement(inst^.syncSeq);
+  inst^.sync := s;
+  InterlockedIncrement(inst^.syncSeq);
+end;
+
+function ReadSync(inst: PScopeInstance; out s: TSyncInfo): Boolean;
+var
+  seq, attempt: LongInt;
+begin
+  for attempt := 1 to 4 do
+  begin
+    ReadWriteBarrier;
+    seq := inst^.syncSeq;
+    ReadWriteBarrier;
+    s := inst^.sync;
+    ReadWriteBarrier;
+    if (not Odd(seq)) and (inst^.syncSeq = seq) then
+      Exit(True);
+  end;
+  s.valid := False;
+  Result := False;
 end;
 
 end.

@@ -533,6 +533,224 @@ begin
   WriteLn('logic: play releases hold ok');
 end;
 
+{ ------------------------------------------------------------------ }
+
+{ Sync view. The signal is the phase within the cycle (0..1), so column
+  x must show x / COLS wherever the playhead is. }
+
+var
+  SyncTempo: Double = 133.0;
+  SyncBeatsPerBar: Double = 4.0;
+  SyncLenBarsT: Double = 1.0;
+  SyncFrame: Int64 = 0;      { song position of the next frame fed }
+
+function SyncBarsAt(frame: Int64): Double;
+begin
+  Result := frame / (SRATE * 60.0 / SyncTempo) / SyncBeatsPerBar;
+end;
+
+{ n frames through ScopeProcess in odd blocks, with a host transport }
+procedure FeedSync(n: Int64; playing, withTransport: Boolean);
+var
+  blk: array[0..699] of Single;
+  ptrs: array[0..1] of PSingle;
+  ab: TClapAudioBuffer;
+  tr: TClapEventTransport;
+  pr: TClapProcess;
+  k, i: Integer;
+  ph, beats, barIdx: Double;
+begin
+  ptrs[0] := @blk[0]; ptrs[1] := @blk[0];
+  FillChar(ab, SizeOf(ab), 0);
+  ab.data32 := @ptrs[0];
+  ab.channel_count := 2;
+  FillChar(pr, SizeOf(pr), 0);
+  pr.audio_inputs := @ab;
+  pr.audio_outputs := @ab;
+  pr.audio_inputs_count := 1;
+  pr.audio_outputs_count := 1;
+  if withTransport then pr.transport := @tr;
+  while n > 0 do
+  begin
+    k := Rnd mod 700 + 1;
+    if k > n then k := n;
+    for i := 0 to k - 1 do
+    begin
+      ph := SyncBarsAt(SyncFrame + i) / SyncLenBarsT;
+      blk[i] := ph - Trunc(ph);
+    end;
+    FillChar(tr, SizeOf(tr), 0);
+    tr.flags := CLAP_TRANSPORT_HAS_TEMPO or CLAP_TRANSPORT_HAS_BEATS_TIMELINE or
+      CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+    if playing then tr.flags := tr.flags or CLAP_TRANSPORT_IS_PLAYING;
+    beats := SyncBarsAt(SyncFrame) * SyncBeatsPerBar;
+    barIdx := Trunc(beats / SyncBeatsPerBar);
+    tr.song_pos_beats := Round(beats * CLAP_BEATTIME_FACTOR);
+    tr.bar_start := Round(barIdx * SyncBeatsPerBar * CLAP_BEATTIME_FACTOR);
+    tr.bar_number := Round(barIdx);
+    tr.tempo := SyncTempo;
+    tr.tsig_num := Round(SyncBeatsPerBar);
+    tr.tsig_denom := 4;
+    pr.frames_count := k;
+    Check(ScopeProcess(@Inst, @pr) = CLAP_PROCESS_CONTINUE, 'sync: process');
+    if playing then Inc(SyncFrame, k);
+    Dec(n, k);
+  end;
+end;
+
+procedure TestSyncCase(lenIdx: Integer; tempo, beatsPerBar: Double);
+const
+  COLS = 200;
+var
+  st: TViewState;
+  vi: TViewInfo;
+  i, x: Integer;
+  lenSamples, eps, d, ph: Double;
+begin
+  NewInstance(SRATE);
+  SyncTempo := tempo;
+  SyncBeatsPerBar := beatsPerBar;
+  SyncLenBarsT := SyncLenBars[lenIdx];
+  SyncFrame := 0;
+  SetParam(@Inst, PARAM_SYNC, 1.0);
+  SetParam(@Inst, PARAM_SYNC_LEN, lenIdx);
+  lenSamples := SyncLenBarsT * beatsPerBar * SRATE * 60.0 / tempo;
+  eps := 2.5 / lenSamples + 1e-4;
+  InitViewState(st);
+
+  FeedSync(Round(2.5 * lenSamples) + 300, True, True);
+  for i := 1 to 250 do
+  begin
+    BuildColumns(@Inst, 0, COLS, ColsA, st, vi);
+    Check(ColsA.count = COLS, 'sync: no frame');
+    Check(vi.sync and vi.sweep and (vi.syncLen = lenIdx), 'sync: not sweeping');
+    Check(vi.viewSamples = Round(lenSamples), 'sync: view length');
+    ph := SyncBarsAt(SyncFrame) / SyncLenBarsT;
+    d := vi.playhead - (ph - Trunc(ph));
+    d := d - Round(d);
+    Check(Abs(d) <= eps, Format('sync: playhead off by %.5f', [d]));
+    for x := 0 to COLS - 1 do
+    begin
+      d := ColsA.minL[x] - (x + 0.5) / COLS;
+      d := d - Round(d);
+      if Abs(d) > 0.5 / COLS + eps then
+        Fail(Format('sync len %d: column %d min shows phase %.4f', [lenIdx, x, ColsA.minL[x]]));
+      d := ColsA.maxL[x] - (x + 0.5) / COLS;
+      d := d - Round(d);
+      if Abs(d) > 0.5 / COLS + eps then
+        Fail(Format('sync len %d: column %d max shows phase %.4f', [lenIdx, x, ColsA.maxL[x]]));
+    end;
+    FeedSync(Rnd mod 500 + 1, True, True);
+  end;
+
+  { zoomed into the middle half of the cycle }
+  st.zoomStart := 0.25;
+  st.zoomSpan := 0.5;
+  for i := 1 to 40 do
+  begin
+    BuildColumns(@Inst, 0, COLS, ColsA, st, vi);
+    Check((ColsA.count = COLS) and vi.sweep, 'sync zoom: no frame');
+    Check((Abs(vi.zoomStart - 0.25) < 1e-9) and (Abs(vi.zoomSpan - 0.5) < 1e-9), 'sync zoom: window');
+    ph := SyncBarsAt(SyncFrame) / SyncLenBarsT;
+    ph := ph - Trunc(ph);
+    if (ph > 0.25 + eps) and (ph < 0.75 - eps) then
+      Check(Abs(vi.playhead - (ph - 0.25) / 0.5) <= 2 * eps, 'sync zoom: playhead')
+    else if (ph < 0.25 - eps) or (ph > 0.75 + eps) then
+      Check((vi.playhead < 0) or (vi.playhead > 1) or (ph < 0.25), 'sync zoom: playhead outside');
+    for x := 0 to COLS - 1 do
+    begin
+      d := ColsA.minL[x] - (0.25 + (x + 0.5) / COLS * 0.5);
+      d := d - Round(d);
+      if Abs(d) > 0.25 / COLS + eps then
+        Fail(Format('sync zoom len %d: column %d shows phase %.4f', [lenIdx, x, ColsA.minL[x]]));
+    end;
+    FeedSync(Rnd mod 500 + 1, True, True);
+  end;
+  st.zoomStart := 0;
+  st.zoomSpan := 1;
+
+  { hold: capture stops, the picture stays as it is }
+  BuildColumns(@Inst, 0, COLS, ColsA, st, vi);
+  SetParam(@Inst, PARAM_HOLD, 1.0);
+  FeedSync(777, True, True);
+  BuildColumns(@Inst, 0, COLS, ColsB, st, vi);
+  Check(vi.sweep, 'sync: hold left the sweep');
+  for x := 0 to COLS - 1 do
+    Check(SameMM(ColMM(ColsA, x), ColMM(ColsB, x)), 'sync: picture moved while holding');
+  SetParam(@Inst, PARAM_HOLD, 0.0);
+  FreeInstance;
+end;
+
+procedure TestSync;
+var
+  st: TViewState;
+  vi: TViewInfo;
+  x: Integer;
+begin
+  TestSyncCase(2, 133.0, 4.0);   { 1 bar }
+  TestSyncCase(0, 133.0, 4.0);   { 1/4 bar }
+  TestSyncCase(1, 97.3, 4.0);    { 1/2 bar }
+  TestSyncCase(5, 171.0, 4.0);   { 8 bars }
+  TestSyncCase(4, 120.0, 3.0);   { 4 bars of 3/4 }
+
+  InitViewState(st);
+  NewInstance(SRATE);
+  SyncTempo := 120.0;
+  SyncBeatsPerBar := 4.0;
+  SyncLenBarsT := 1.0;
+  SyncFrame := 0;
+  SetParam(@Inst, PARAM_SYNC_LEN, 2);
+  FeedSync(9000, True, True);
+
+  { sync off: the transport is ignored }
+  BuildColumns(@Inst, 0, 200, ColsA, st, vi);
+  Check((ColsA.count = 200) and (not vi.sync), 'sync: active without being selected');
+
+  SetParam(@Inst, PARAM_SYNC, 1.0);
+  BuildColumns(@Inst, 0, 200, ColsA, st, vi);
+  Check(vi.sync and vi.sweep, 'sync: not active when selected');
+  Check((vi.lenBars = 1.0) and (vi.beatsPerBar = 4.0), 'sync: bar info');
+
+  { stop: hold engages and the last cycle stays; play releases it }
+  BuildColumns(@Inst, 0, 200, ColsA, st, vi);
+  FeedSync(500, False, True);
+  Check(GetParam(@Inst, PARAM_HOLD) = 1.0, 'sync: stop did not engage hold');
+  BuildColumns(@Inst, 0, 200, ColsB, st, vi);
+  Check(vi.sync and vi.sweep, 'sync: stop left the cycle view');
+  for x := 0 to 199 do
+    Check(SameMM(ColMM(ColsA, x), ColMM(ColsB, x)), 'sync: picture changed on stop');
+  FeedSync(500, True, True);
+  Check(GetParam(@Inst, PARAM_HOLD) = 0.0, 'sync: play did not release hold');
+  BuildColumns(@Inst, 0, 200, ColsB, st, vi);
+  Check(vi.sweep, 'sync: no cycle view after play');
+
+  { stopped with hold released by hand: free-running view of the same length }
+  FeedSync(500, False, True);
+  SetParam(@Inst, PARAM_HOLD, 0.0);
+  FeedSync(500, False, True);
+  BuildColumns(@Inst, 0, 200, ColsA, st, vi);
+  Check(vi.sync and (not vi.sweep) and (vi.viewSamples = 2000), 'sync: stopped view');
+
+  { host without transport: back to the normal view }
+  FeedSync(500, False, False);
+  BuildColumns(@Inst, 0, 200, ColsA, st, vi);
+  Check((ColsA.count = 200) and (not vi.sync), 'sync: active without a transport');
+  Check(vi.viewSamples = ViewSampleCount(@Inst), 'sync: fallback view length');
+  FreeInstance;
+
+  { 8 bars at 30 bpm do not fit the ring: the longest that fits is used }
+  NewInstance(SRATE);
+  SyncTempo := 30.0;
+  SyncFrame := 0;
+  SetParam(@Inst, PARAM_SYNC, 1.0);
+  SetParam(@Inst, PARAM_SYNC_LEN, 5);
+  FeedSync(3000, True, True);
+  BuildColumns(@Inst, 0, 200, ColsA, st, vi);
+  Check(vi.sync and (vi.syncLen = 3) and (ColsA.count = 200), 'sync: long cycle not shortened');
+  FreeInstance;
+  WriteLn('logic: bar sync ok');
+end;
+
 procedure RunLogicTests;
 begin
   ReturnNilIfGrowHeapFails := True;
@@ -544,6 +762,7 @@ begin
   TestParams;
   TestProcessChannels;
   TestTransportReleasesHold;
+  TestSync;
 end;
 
 { threading stress test }

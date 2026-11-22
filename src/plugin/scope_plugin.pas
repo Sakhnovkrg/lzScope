@@ -165,10 +165,17 @@ begin
       begin
         iv := Round(value);
         if iv < 0 then iv := 0;
-        if iv > 3 then iv := 3;
+        if iv > RETRIG_COUNT - 1 then iv := RETRIG_COUNT - 1;
         s := ShortString(RetrigNames[iv]);
       end;
-    PARAM_HOLD:
+    PARAM_SYNC_LEN:
+      begin
+        iv := Round(value);
+        if iv < 0 then iv := 0;
+        if iv > SYNC_LEN_COUNT - 1 then iv := SYNC_LEN_COUNT - 1;
+        s := ShortString(SyncLenNames[iv]);
+      end;
+    PARAM_HOLD, PARAM_SYNC:
       if value >= 0.5 then s := 'on' else s := 'off';
   else
     Exit;
@@ -190,13 +197,20 @@ begin
   s := LowerCase(Trim(AnsiString(text)));
 
   if param_id = PARAM_RETRIG then
-    for i := 0 to 3 do
+    for i := 0 to RETRIG_COUNT - 1 do
       if s = LowerCase(AnsiString(RetrigNames[i])) then
       begin
         out_value^ := i;
         Exit(True);
       end;
-  if param_id = PARAM_HOLD then
+  if param_id = PARAM_SYNC_LEN then
+    for i := 0 to SYNC_LEN_COUNT - 1 do
+      if s = LowerCase(AnsiString(SyncLenNames[i])) then
+      begin
+        out_value^ := i;
+        Exit(True);
+      end;
+  if (param_id = PARAM_HOLD) or (param_id = PARAM_SYNC) then
   begin
     if (s = 'on') or (s = 'yes') or (s = 'true') then
     begin
@@ -379,8 +393,7 @@ end;
 
 function GuiExtSetScale(plugin: PClapPlugin; scale: Double): Boolean; cdecl;
 begin
-  PScopeInstance(plugin^.plugin_data)^.guiScale := scale;
-  Result := True;
+  Result := GuiSetScale(PScopeInstance(plugin^.plugin_data), scale);
 end;
 
 function GuiExtGetSize(plugin: PClapPlugin; width, height: PUInt32): Boolean; cdecl;
@@ -406,10 +419,7 @@ end;
 
 function GuiExtAdjustSize(plugin: PClapPlugin; width, height: PUInt32): Boolean; cdecl;
 begin
-  if width^ < MIN_GUI_W then width^ := MIN_GUI_W;
-  if height^ < MIN_GUI_H then height^ := MIN_GUI_H;
-  if width^ > MAX_GUI_W then width^ := MAX_GUI_W;
-  if height^ > MAX_GUI_H then height^ := MAX_GUI_H;
+  GuiAdjustSize(PScopeInstance(plugin^.plugin_data), width^, height^);
   Result := True;
 end;
 

@@ -19,10 +19,37 @@ type
     minL, maxL, minR, maxR: array[0..MAX_COLS - 1] of Single;
   end;
 
-{ anchorOffs = samples between the right edge and the newest sample.
-  cols.count = 0: nothing to draw. }
+  { what the last BuildColumns showed }
+  TViewInfo = record
+    anchorOffs: Double;   { samples between the right edge and the newest sample }
+    viewSamples: Integer;
+    sync: Boolean;        { length comes from the host's bars }
+    sweep: Boolean;       { transport running: one cycle, drawn in place }
+    syncLen: Integer;     { SYNC_LEN index in use }
+    lenBars: Double;
+    beatsPerBar: Double;
+    playhead: Double;     { 0..1 across the view while sweeping, < 0 = outside }
+    zoomStart, zoomSpan: Double;   { part of the cycle on screen, 0..1 }
+  end;
+
+  { kept by the caller between frames }
+  TViewState = record
+    zoomStart, zoomSpan: Double;   { in: part of a synced cycle to show }
+    haveStart: Boolean;
+    cycleStart: Int64;
+  end;
+
+const
+  SYNC_MIN_SAMPLES = 16;   { deepest zoom into a synced cycle }
+
+procedure InitViewState(out st: TViewState);
+
+{ cols.count = 0: nothing to draw }
 procedure BuildColumns(inst: PScopeInstance; holdOffs: Double;
-  colCount: Integer; var cols: TColumns; out anchorOffs: Double);
+  colCount: Integer; var cols: TColumns; var state: TViewState;
+  out info: TViewInfo); overload;
+procedure BuildColumns(inst: PScopeInstance; holdOffs: Double;
+  colCount: Integer; var cols: TColumns; out anchorOffs: Double); overload;
 
 function ViewSampleCount(inst: PScopeInstance): Integer;
 { largest usable hold offset }
@@ -32,6 +59,14 @@ implementation
 
 const
   SNAPSHOT_TRIES = 4;
+
+procedure InitViewState(out st: TViewState);
+begin
+  st.zoomStart := 0;
+  st.zoomSpan := 1;
+  st.haveStart := False;
+  st.cycleStart := 0;
+end;
 
 function FloorDiv(a, b: Int64): Int64; inline;
 begin
@@ -128,20 +163,161 @@ begin
   end;
 end;
 
+{ min/max of frames [a0, a1) into column x; frames below validFrom are silence }
+procedure FillColumn(const r: TScopeRing; a0, a1, validFrom: Int64;
+  var cols: TColumns; x: Integer);
+var
+  lo: Int64;
+  mm: TMinMax;
+begin
+  lo := a0;
+  if lo < validFrom then lo := validFrom;
+  if lo >= a1 then
+  begin
+    cols.minL[x] := 0; cols.maxL[x] := 0;
+    cols.minR[x] := 0; cols.maxR[x] := 0;
+    Exit;
+  end;
+  RingMinMax(r, lo, a1, mm);
+  if a0 < validFrom then
+  begin
+    if mm.mnL > 0 then mm.mnL := 0;
+    if mm.mxL < 0 then mm.mxL := 0;
+    if mm.mnR > 0 then mm.mnR := 0;
+    if mm.mxR < 0 then mm.mxR := 0;
+  end;
+  cols.minL[x] := mm.mnL; cols.maxL[x] := mm.mxL;
+  cols.minR[x] := mm.mnR; cols.maxR[x] := mm.mxR;
+end;
+
+{ True if the view follows the host's bars; a length that does not fit
+  the ring falls back to the next shorter one }
+function SyncSetup(inst: PScopeInstance; const r: TScopeRing; colCount: Integer;
+  out si: TSyncInfo; out idx: Integer; out lenSamples: Double): Boolean;
+var
+  maxLen: Double;
+begin
+  Result := False;
+  idx := 0;
+  lenSamples := 0;
+  if GetParam(inst, PARAM_SYNC) < 0.5 then Exit;
+  if (not ReadSync(inst, si)) or (not si.valid) then Exit;
+  idx := Round(ClampParam(PARAM_SYNC_LEN, GetParam(inst, PARAM_SYNC_LEN)));
+  maxLen := Int64(r.size) - RING_CHUNK - 4 - Int64(r.size div colCount);
+  repeat
+    lenSamples := SyncLenBars[idx] * si.samplesPerBar;
+    if lenSamples <= maxLen then Break;
+    if idx = 0 then Exit;
+    Dec(idx);
+  until False;
+  Result := lenSamples >= 16;
+end;
+
+{ Transport running: the view is one cycle. Columns left of the playhead
+  come from the current cycle, the rest from the previous one, so a
+  looped part stands still. }
+function ScanSweep(const r: TScopeRing; const si: TSyncInfo; written,
+  validFrom: Int64; lenBars, lenSamples: Double; colCount: Integer;
+  var cols: TColumns; var state: TViewState; var info: TViewInfo): Int64;
+var
+  phase, start, span, zs: Double;
+  s0, cp, lenInt, o0, o1, winStart, winLen: Int64;
+  x: Integer;
+begin
+  lenInt := Round(lenSamples);
+
+  { zoom window inside the cycle }
+  span := state.zoomSpan;
+  zs := state.zoomStart;
+  if IsNaNValue(span) or IsNaNValue(zs) or (span <= 0) or (span > 1) then
+  begin
+    span := 1;
+    zs := 0;
+  end;
+  if span * lenInt < SYNC_MIN_SAMPLES then span := SYNC_MIN_SAMPLES / lenInt;
+  if span > 1 then span := 1;
+  if zs < 0 then zs := 0;
+  if zs > 1 - span then zs := 1 - span;
+  winStart := Round(zs * lenInt);
+  winLen := Round(span * lenInt);
+  if winLen < 1 then winLen := 1;
+  if winStart + winLen > lenInt then winStart := lenInt - winLen;
+  info.zoomStart := zs;
+  info.zoomSpan := span;
+
+  phase := (si.bars + (written - si.frame) / si.samplesPerBar) / lenBars;
+  phase := phase - Trunc(phase);
+  if phase < 0 then phase := phase + 1;
+  start := written - phase * lenSamples;
+  { the reported position jitters by a fraction of a sample }
+  if state.haveStart and (Abs(start - state.cycleStart) < 1.5) then
+    s0 := state.cycleStart
+  else
+    s0 := Round(start);
+  state.cycleStart := s0;
+  state.haveStart := True;
+
+  cp := written - s0;
+  if cp < 0 then cp := 0;
+  if cp > lenInt then cp := lenInt;
+  info.playhead := (cp - winStart) / winLen;
+  if info.playhead > 1 then info.playhead := -1;
+
+  for x := 0 to colCount - 1 do
+  begin
+    o0 := winStart + (Int64(x) * winLen) div colCount;
+    o1 := winStart + (Int64(x + 1) * winLen) div colCount;
+    if o1 <= o0 then o1 := o0 + 1;
+    if o1 <= cp then
+      FillColumn(r, s0 + o0, s0 + o1, validFrom, cols, x)
+    else if o0 >= cp then
+      FillColumn(r, s0 - lenInt + o0, s0 - lenInt + o1, validFrom, cols, x)
+    else
+      FillColumn(r, s0 + o0, s0 + cp, validFrom, cols, x);
+  end;
+
+  Result := written - lenInt;
+  if Result < validFrom then Result := validFrom;
+  if Result > written then Result := written;
+end;
+
 { one pass; returns the oldest frame read }
 function ScanColumns(inst: PScopeInstance; const r: TScopeRing;
   written, validFrom: Int64; holdOffs: Double; colCount: Integer;
-  var cols: TColumns; out anchorOffs: Double): Int64;
+  var cols: TColumns; var state: TViewState; out info: TViewInfo): Int64;
 var
   endAbs, base, reach, low, crossAt, kBase, c0, c1, lo: Int64;
   viewSamples, searchLimit, retrig, x: Integer;
   pos: Int64;
   useGrid: Boolean;
-  mm: TMinMax;
+  si: TSyncInfo;
+  lenSamples: Double;
 begin
   Result := written;
+  FillChar(info, SizeOf(info), 0);
 
-  viewSamples := ViewSamplesFor(r, inst^.srate, GetParam(inst, PARAM_VIEW_MS));
+  info.sync := SyncSetup(inst, r, colCount, si, info.syncLen, lenSamples);
+  if info.sync then
+  begin
+    info.lenBars := SyncLenBars[info.syncLen];
+    info.beatsPerBar := si.beatsPerBar;
+    info.viewSamples := Round(lenSamples);
+    if si.playing then
+    begin
+      info.sweep := True;
+      Result := ScanSweep(r, si, written, validFrom, info.lenBars, lenSamples,
+        colCount, cols, state, info);
+      Exit;
+    end;
+    { stopped: free-run with the same length }
+    viewSamples := info.viewSamples;
+  end
+  else
+    viewSamples := ViewSamplesFor(r, inst^.srate, GetParam(inst, PARAM_VIEW_MS));
+  info.viewSamples := viewSamples;
+  info.zoomSpan := 1;
+  info.playhead := -1;
+  state.haveStart := False;
   reach := ReachFor(r, viewSamples, colCount);
   endAbs := written - 1;
   useGrid := viewSamples > colCount;
@@ -158,7 +334,7 @@ begin
   begin
     { end the view at the most recent crossing }
     retrig := Round(GetParam(inst, PARAM_RETRIG));
-    if (retrig >= RETRIG_ANY) and (retrig <= RETRIG_DESC) then
+    if (not info.sync) and (retrig >= RETRIG_ANY) and (retrig <= RETRIG_DESC) then
     begin
       searchLimit := viewSamples + Round(inst^.srate * 0.1);
       if searchLimit > Integer(r.size div 2) then
@@ -188,7 +364,7 @@ begin
     kBase := kBase - colCount;
   end;
   base := endAbs - viewSamples + 1;
-  anchorOffs := (written - 1) - endAbs;
+  info.anchorOffs := (written - 1) - endAbs;
 
   lo := base;
   if lo < validFrom then lo := validFrom;
@@ -208,37 +384,19 @@ begin
     end;
     { fewer samples than pixels: steps }
     if c1 <= c0 then c1 := c0 + 1;
-
-    lo := c0;
-    if lo < validFrom then lo := validFrom;
-    if lo >= c1 then
-    begin
-      cols.minL[x] := 0; cols.maxL[x] := 0;
-      cols.minR[x] := 0; cols.maxR[x] := 0;
-      Continue;
-    end;
-    RingMinMax(r, lo, c1, mm);
-    if c0 < validFrom then
-    begin
-      { partly cleared column: include silence }
-      if mm.mnL > 0 then mm.mnL := 0;
-      if mm.mxL < 0 then mm.mxL := 0;
-      if mm.mnR > 0 then mm.mnR := 0;
-      if mm.mxR < 0 then mm.mxR := 0;
-    end;
-    cols.minL[x] := mm.mnL; cols.maxL[x] := mm.mxL;
-    cols.minR[x] := mm.mnR; cols.maxR[x] := mm.mxR;
+    FillColumn(r, c0, c1, validFrom, cols, x);
   end;
 end;
 
 procedure BuildColumns(inst: PScopeInstance; holdOffs: Double;
-  colCount: Integer; var cols: TColumns; out anchorOffs: Double);
+  colCount: Integer; var cols: TColumns; var state: TViewState;
+  out info: TViewInfo);
 var
   w1, w2, validFrom, oldest: Int64;
   attempt: Integer;
 begin
   cols.count := 0;
-  anchorOffs := 0;
+  FillChar(info, SizeOf(info), 0);
   if colCount > MAX_COLS then colCount := MAX_COLS;
   if colCount < 2 then Exit;
 
@@ -252,7 +410,7 @@ begin
       validFrom := RingValidFrom(inst^.ring);
       w1 := RingWritten(inst^.ring);
       oldest := ScanColumns(inst, inst^.ring, w1, validFrom, holdOffs,
-        colCount, cols, anchorOffs);
+        colCount, cols, state, info);
       w2 := RingWritten(inst^.ring);
       if RingSpanValid(inst^.ring, w1, w2, oldest) then
       begin
@@ -260,10 +418,21 @@ begin
         Exit;
       end;
     end;
-    anchorOffs := 0;
+    FillChar(info, SizeOf(info), 0);
   finally
     System.LeaveCriticalSection(inst^.lock);
   end;
+end;
+
+procedure BuildColumns(inst: PScopeInstance; holdOffs: Double;
+  colCount: Integer; var cols: TColumns; out anchorOffs: Double);
+var
+  state: TViewState;
+  info: TViewInfo;
+begin
+  InitViewState(state);
+  BuildColumns(inst, holdOffs, colCount, cols, state, info);
+  anchorOffs := info.anchorOffs;
 end;
 
 end.

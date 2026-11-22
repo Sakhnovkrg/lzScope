@@ -45,7 +45,12 @@ const
   CLAP_EVENT_PARAM_GESTURE_END   = 8;
   CLAP_EVENT_TRANSPORT           = 9;
 
-  CLAP_TRANSPORT_IS_PLAYING = 1 shl 4;
+  CLAP_TRANSPORT_HAS_TEMPO          = 1 shl 0;
+  CLAP_TRANSPORT_HAS_BEATS_TIMELINE = 1 shl 1;
+  CLAP_TRANSPORT_HAS_TIME_SIGNATURE = 1 shl 3;
+  CLAP_TRANSPORT_IS_PLAYING         = 1 shl 4;
+
+  CLAP_BEATTIME_FACTOR = Int64(1) shl 31;
   CLAP_EVENT_MIDI                = 10;
   CLAP_EVENT_MIDI_SYSEX          = 11;
   CLAP_EVENT_MIDI2               = 12;
@@ -117,11 +122,22 @@ type
     param_id: TClapId;
   end;
 
-  { leading part of clap_event_transport }
   PClapEventTransport = ^TClapEventTransport;
   TClapEventTransport = record
     header: TClapEventHeader;
     flags: UInt32;
+    song_pos_beats: Int64;     { fixed point, see CLAP_BEATTIME_FACTOR }
+    song_pos_seconds: Int64;
+    tempo: Double;             { bpm }
+    tempo_inc: Double;
+    loop_start_beats: Int64;
+    loop_end_beats: Int64;
+    loop_start_seconds: Int64;
+    loop_end_seconds: Int64;
+    bar_start: Int64;          { start of the current bar, beats }
+    bar_number: Int32;
+    tsig_num: UInt16;
+    tsig_denom: UInt16;
   end;
 
   PClapInputEvents = ^TClapInputEvents;
