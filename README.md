@@ -48,3 +48,11 @@ in Free Pascal / Lazarus, with an OpenGL GUI inspired by the Cockos "Oscilloscop
 - **Linux**: 64-bit x86, glibc 2.34 or later (Ubuntu 22.04, Debian 12,
   Fedora 35 or newer), X11 or Wayland with XWayland
 - OpenGL
+
+## License
+
+Copyright (C) 2026 Alexandr Sakhnov.
+
+lzScope is free software under the GNU Lesser General Public License, version 3
+or (at your option) any later version: see [LICENSE.md](LICENSE.md). It comes
+with no warranty.
