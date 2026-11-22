@@ -21,6 +21,13 @@ const
   CLAP_EXT_PARAMS      = 'clap.params';
   CLAP_EXT_STATE       = 'clap.state';
   CLAP_EXT_GUI         = 'clap.gui';
+  CLAP_EXT_POSIX_FD_SUPPORT = 'clap.posix-fd-support';
+  CLAP_EXT_TIMER_SUPPORT    = 'clap.timer-support';
+
+  CLAP_POSIX_FD_READ  = 1 shl 0;
+  CLAP_POSIX_FD_WRITE = 1 shl 1;
+  CLAP_POSIX_FD_ERROR = 1 shl 2;
+
 
   CLAP_WINDOW_API_WIN32 = 'win32';
   CLAP_WINDOW_API_COCOA = 'cocoa';
@@ -76,6 +83,7 @@ const
 
 type
   TClapId = UInt32;
+  PClapId = ^TClapId;
 
   PPSingle = ^PSingle;
   PPDouble = ^PDouble;
@@ -342,6 +350,32 @@ type
     request_show: function(host: PClapHost): Boolean; cdecl;
     request_hide: function(host: PClapHost): Boolean; cdecl;
     closed: procedure(host: PClapHost; was_destroyed: Boolean); cdecl;
+  end;
+
+  { posix-fd-support, timer-support: how X11 editors get main-thread events }
+
+  PClapPluginPosixFdSupport = ^TClapPluginPosixFdSupport;
+  TClapPluginPosixFdSupport = record
+    on_fd: procedure(plugin: PClapPlugin; fd: Int32; flags: UInt32); cdecl;
+  end;
+
+  PClapHostPosixFdSupport = ^TClapHostPosixFdSupport;
+  TClapHostPosixFdSupport = record
+    register_fd: function(host: PClapHost; fd: Int32; flags: UInt32): Boolean; cdecl;
+    modify_fd: function(host: PClapHost; fd: Int32; flags: UInt32): Boolean; cdecl;
+    unregister_fd: function(host: PClapHost; fd: Int32): Boolean; cdecl;
+  end;
+
+  PClapPluginTimerSupport = ^TClapPluginTimerSupport;
+  TClapPluginTimerSupport = record
+    on_timer: procedure(plugin: PClapPlugin; timer_id: TClapId); cdecl;
+  end;
+
+  PClapHostTimerSupport = ^TClapHostTimerSupport;
+  TClapHostTimerSupport = record
+    register_timer: function(host: PClapHost; period_ms: UInt32;
+                             timer_id: PClapId): Boolean; cdecl;
+    unregister_timer: function(host: PClapHost; timer_id: TClapId): Boolean; cdecl;
   end;
 
 implementation

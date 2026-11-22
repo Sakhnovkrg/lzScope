@@ -357,6 +357,27 @@ begin
   Result := True;
 end;
 
+{ posix-fd-support, timer-support: the X11 editor's events }
+
+procedure PosixFdOnFd(plugin: PClapPlugin; fd: Int32; flags: UInt32); cdecl;
+begin
+  GuiOnFd(PScopeInstance(plugin^.plugin_data), fd);
+end;
+
+procedure TimerOnTimer(plugin: PClapPlugin; timer_id: TClapId); cdecl;
+begin
+  GuiOnTimer(PScopeInstance(plugin^.plugin_data), timer_id);
+end;
+
+const
+  PosixFdExt: TClapPluginPosixFdSupport = (
+    on_fd: @PosixFdOnFd
+  );
+
+  TimerExt: TClapPluginTimerSupport = (
+    on_timer: @TimerOnTimer
+  );
+
 const
   StateExt: TClapPluginState = (
     save: @StateSave;
@@ -546,7 +567,11 @@ begin
   else if StrComp(id, CLAP_EXT_STATE) = 0 then
     Result := @StateExt
   else if StrComp(id, CLAP_EXT_GUI) = 0 then
-    Result := @GuiExt;
+    Result := @GuiExt
+  else if OS_HOST_EVENTS and (StrComp(id, CLAP_EXT_POSIX_FD_SUPPORT) = 0) then
+    Result := @PosixFdExt
+  else if OS_HOST_EVENTS and (StrComp(id, CLAP_EXT_TIMER_SUPPORT) = 0) then
+    Result := @TimerExt;
 end;
 
 procedure PlugOnMainThread(plugin: PClapPlugin); cdecl;

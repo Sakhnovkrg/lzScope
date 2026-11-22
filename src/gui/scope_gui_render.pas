@@ -167,13 +167,13 @@ begin
 end;
 
 { sync view: lines on bars, beats and finer; labelled bar.beat.sixteenth
-  from the cycle start }
+  of the song, as the host counts bars }
 procedure DrawBeatGrid(g: PScopeGui; const f: TFrame);
 const
   Steps: array[0..8] of Double =
     (1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1);   { beats }
 var
-  bpb, lenBeats, step, p, beat, first, visBeats, labelEnd: Double;
+  bpb, lenBeats, step, p, beat, first, visBeats, labelEnd, song: Double;
   i, k, bar, x, q: Integer;
   tw: Single;
   s, s2: ShortString;
@@ -182,6 +182,7 @@ begin
   lenBeats := f.vi.lenBars * bpb;
   if (bpb <= 0) or (lenBeats <= 0) or (f.vi.zoomSpan <= 0) then Exit;
   first := f.vi.zoomStart * lenBeats;     { left edge, beats from the cycle start }
+  song := f.vi.cycleBar * bpb;            { the cycle start, beats into the song }
   visBeats := f.vi.zoomSpan * lenBeats;
 
   { the finest step that keeps the lines apart }
@@ -201,13 +202,16 @@ begin
   if step = 0 then Exit;
 
   labelEnd := 0;
-  k := Trunc(first / step) + 1;
+  { from the left edge when it is on a step: the cycle start is bar 1 }
+  k := Ceil(first / step - 1e-9);
   while k * step < first + visBeats - 1e-9 do
   begin
     p := k * step;
-    bar := Trunc(p / bpb + 1e-9);
-    beat := p - bar * bpb;
     x := f.x0 + Round(f.pw * (p - first) / visBeats);
+    { the label from where the line is in the song }
+    bar := Floor((song + p) / bpb + 1e-9);
+    beat := song + p - bar * bpb;
+    if beat < 0 then beat := 0;
     { whole sixteenths get a label, anything finer only a faint line }
     q := Round(beat * 4);
     if Abs(beat * 4 - q) > 1e-6 then q := -1;
@@ -266,8 +270,63 @@ begin
   DrawTextGL(g, f.x0 - 6 * f.px - TextWidth(g, s), y + g^.fontH * 0.35, s);
 end;
 
-{ center line and dB scale of the current lane }
-procedure DrawLevelGrid(g: PScopeGui; const f: TFrame);
+{ split view: the lane's side towards the other lane, +1 = down, -1 = up }
+function InnerSide(const f: TFrame): Integer;
+begin
+  Result := 0;
+  if not f.split then Exit;
+  if f.yBot <= f.yMid then
+    Result := 1
+  else
+    Result := -1;
+end;
+
+{ a line a px from the center on side dir would crowd the lane border:
+  both lanes have one there, so the border stands for them }
+function AtBorder(const f: TFrame; dir: Integer; a: Single): Boolean;
+var
+  inner: Integer;
+begin
+  inner := InnerSide(f);
+  Result := (inner <> 0) and (dir = inner) and
+    (inner * (f.yCent + inner * a - f.yMid) > -12 * f.px);
+end;
+
+{ the labels of a level pair; the one on the lane border goes to edge }
+procedure DrawLevelLabels(g: PScopeGui; const f: TFrame; a: Single;
+  const s: ShortString; var edge: ShortString);
+var
+  dir: Integer;
+begin
+  for dir := -1 to 1 do
+  begin
+    if dir = 0 then Continue;
+    if AtBorder(f, dir, a) then
+      edge := s
+    else
+      DrawLevelLabel(g, f, f.yCent + dir * a, s);
+  end;
+end;
+
+{ a level line on both sides of the center, but not on the lane border }
+procedure DrawLevelPair(const f: TFrame; a: Single);
+var
+  dir: Integer;
+begin
+  glBegin(GL_LINES);
+  for dir := -1 to 1 do
+    if (dir <> 0) and not AtBorder(f, dir, a) then
+    begin
+      glVertex2f(f.x0, f.yCent + dir * a); glVertex2f(f.w, f.yCent + dir * a);
+    end;
+  glEnd;
+end;
+
+{ center line and dB scale of the current lane. Split view: the lines at
+  the lane border are left out, their label goes to edge (edgeRed: the
+  0 dBFS one), drawn once on the border by the caller }
+procedure DrawLevelGrid(g: PScopeGui; const f: TFrame; var edge: ShortString;
+  var edgeRed: Boolean);
 var
   iter: Integer;
   v: Double;
@@ -289,19 +348,17 @@ begin
     if a <= 24 * f.px then Break;
     if a < ly then
     begin
-      glColor4f(0.6, 0.6, 0.6, 0.25);
-      glBegin(GL_LINES);
-      glVertex2f(f.x0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
-      glVertex2f(f.x0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
-      glEnd;
+      s := '';
       { whole dB only; the red 0 dB label wins over a close one }
       if (Abs(v - Round(v)) < 1e-6) and
          ((f.vzoom <= 0) or (Abs(a - f.sc) > g^.fontH + 2 * f.px)) then
-      begin
         FormatDbShort(v, s);
+      glColor4f(0.6, 0.6, 0.6, 0.25);
+      DrawLevelPair(f, a);
+      if s <> '' then
+      begin
         glColor4f(0.75, 0.75, 0.75, 0.55);
-        DrawLevelLabel(g, f, f.yCent - a, s);
-        DrawLevelLabel(g, f, f.yCent + a, s);
+        DrawLevelLabels(g, f, a, s, edge);
       end;
       ly := a - 20 * f.px;
     end;
@@ -313,12 +370,15 @@ begin
   begin
     a := f.sc;
     glColor4f(0.85, 0.35, 0.35, 0.5);
-    glBegin(GL_LINES);
-    glVertex2f(f.x0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
-    glVertex2f(f.x0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
-    glEnd;
-    DrawLevelLabel(g, f, f.yCent - a, '0');
-    DrawLevelLabel(g, f, f.yCent + a, '0');
+    DrawLevelPair(f, a);
+    s := '';
+    DrawLevelLabels(g, f, a, '0', s);
+    { on the border it wins over a grey label }
+    if s <> '' then
+    begin
+      edge := s;
+      edgeRed := True;
+    end;
   end;
 end;
 
@@ -750,6 +810,8 @@ end;
 procedure RenderFrame(g: PScopeGui; const key: TFrameKey);
 var
   f: TFrame;
+  edge: ShortString;
+  edgeRed: Boolean;
   x: Single;
   nCols: Integer;
 begin
@@ -809,17 +871,27 @@ begin
   f.split := GetParam(g^.inst, PARAM_SPLIT) >= 0.5;
   f.yMid := (f.pTop + f.pBot) div 2;
 
+  edge := '';
+  edgeRed := False;
   SetLane(f, 0);
-  DrawLevelGrid(g, f);
+  DrawLevelGrid(g, f, edge, edgeRed);
   if f.split then
   begin
     SetLane(f, 1);
-    DrawLevelGrid(g, f);
-    { lane border }
+    DrawLevelGrid(g, f, edge, edgeRed);
+    { lane border, labelled with the level both lanes have there }
     glColor4f(0.6, 0.6, 0.6, 0.5);
     glBegin(GL_LINES);
     glVertex2f(f.x0, f.yTop + 0.5); glVertex2f(f.w, f.yTop + 0.5);
     glEnd;
+    if edge <> '' then
+    begin
+      if edgeRed then
+        glColor4f(0.85, 0.35, 0.35, 0.8)
+      else
+        glColor4f(0.75, 0.75, 0.75, 0.55);
+      DrawLevelLabel(g, f, f.yTop + 0.5, edge);
+    end;
   end;
   DrawTimeGrid(g, f);
   if g^.cols.count > 0 then

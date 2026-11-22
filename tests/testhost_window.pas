@@ -21,17 +21,24 @@ const
 {$ELSEIF DEFINED(DARWIN)}
   PLUGIN_LIB = 'liblzscope.dylib';
   HOST_WINDOW_API = CLAP_WINDOW_API_COCOA;
+{$ELSEIF DEFINED(LINUX)}
+  PLUGIN_LIB = 'liblzscope.so';
+  HOST_WINDOW_API = CLAP_WINDOW_API_X11;
 {$ENDIF}
 
 type
   THostResize = procedure(w, h: Integer);
   THostClose = procedure;
+  { up to waitMs for the plugin's fd, then its fd and timer callbacks }
+  THostEvents = procedure(waitMs: Integer);
 
 var
   { the client area changed size }
   OnHostResize: THostResize = nil;
   { the user closed the window; it is gone after this returns }
   OnHostClose: THostClose = nil;
+  { X11: the editor's events reach it only through these host callbacks }
+  OnHostEvents: THostEvents = nil;
 
 { for libraries loaded after this }
 procedure HostSetEnv(const name, value: AnsiString);
@@ -61,6 +68,8 @@ implementation
   {$I os/testhost_win32.inc}
 {$ELSEIF DEFINED(DARWIN)}
   {$I os/testhost_cocoa.inc}
+{$ELSEIF DEFINED(LINUX)}
+  {$I os/testhost_x11.inc}
 {$ENDIF}
 
 end.

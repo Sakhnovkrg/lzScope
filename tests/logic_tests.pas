@@ -14,7 +14,7 @@ procedure RunStressTest;
 implementation
 
 uses
-  SysUtils, clap_api, scope_ring, scope_state, scope_defaults, scope_dsp, scope_view;
+  SysUtils, Math, clap_api, scope_ring, scope_state, scope_defaults, scope_dsp, scope_view;
 
 const
   SRATE = 1000.0;   { ~10 000 frames of history }
@@ -629,6 +629,11 @@ begin
     d := vi.playhead - (ph - Trunc(ph));
     d := d - Round(d);
     Check(Abs(d) <= eps, Format('sync: playhead off by %.5f', [d]));
+    { the grid counts bars from the song start: the cycle playing now }
+    if (ph - Floor(ph) > eps) and (ph - Floor(ph) < 1 - eps) then
+      Check(Abs(vi.cycleBar - Floor(ph) * SyncLenBarsT) < 1e-9,
+        Format('sync: cycle starts at bar %.3f, expected %.3f',
+          [vi.cycleBar, Floor(ph) * SyncLenBarsT]));
     for x := 0 to COLS - 1 do
     begin
       d := ColsA.minL[x] - (x + 0.5) / COLS;

@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — 2026-11-22
 
+- Linux version (x86_64, X11 and XWayland)
+- Sync mode: the grid is labelled with the song's bars, not from 1 each cycle
+- Sync mode: the cycle start is labelled too
+- Split view: one dB line and label where the lanes meet, not two
 - "save default": new instances start with the current settings
 - Header, dB scale and time labels no longer overlap the waveform
 - Crosshair shows time and frequency instead of the grid

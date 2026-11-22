@@ -11,7 +11,7 @@ uses
   clap_api, scope_ring;
 
 const
-  PLUGIN_VERSION = '1.1.0';
+  PLUGIN_VERSION = '1.2.0';
   PLUGIN_AUTHOR  = 'DsgDnB';
   PLUGIN_URL     = 'https://github.com/sakhnovkrg';
 

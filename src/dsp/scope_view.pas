@@ -28,6 +28,7 @@ type
     syncLen: Integer;     { SYNC_LEN index in use }
     lenBars: Double;
     beatsPerBar: Double;
+    cycleBar: Double;     { while sweeping: song position of the cycle start, bars from 0 }
     playhead: Double;     { 0..1 across the view while sweeping, < 0 = outside }
     zoomStart, zoomSpan: Double;   { part of the cycle on screen, 0..1 }
   end;
@@ -56,6 +57,9 @@ function ViewSampleCount(inst: PScopeInstance): Integer;
 function HoldReach(inst: PScopeInstance; viewSamples, colCount: Integer): Int64;
 
 implementation
+
+uses
+  Math;
 
 const
   SNAPSHOT_TRIES = 4;
@@ -253,8 +257,8 @@ begin
   info.zoomSpan := span;
 
   phase := (si.bars + (written - si.frame) / si.samplesPerBar) / lenBars;
-  phase := phase - Trunc(phase);
-  if phase < 0 then phase := phase + 1;
+  info.cycleBar := Floor(phase) * lenBars;
+  phase := phase - Floor(phase);
   start := written - phase * lenSamples;
   { the reported position jitters by a fraction of a sample }
   if state.haveStart and (Abs(start - state.cycleStart) < 1.5) then

@@ -1,7 +1,10 @@
 #!/bin/sh
-# Build lzScope CLAP plugin on macOS, run the smoke tests and install the
-# .clap bundle. Uses lazbuild (validates the .lpi files) with a plain-fpc
-# fallback.
+# Build lzScope CLAP plugin on macOS or Linux, run the smoke tests and
+# install the .clap. Uses lazbuild (validates the .lpi files) with a
+# plain-fpc fallback.
+#
+# Linux: the tests open X11 windows, so they need a display (X11 or
+# XWayland). Installs to ~/.clap/lzscope.clap.
 #
 # Toolchain lookup: $LAZBUILD / $FPC if set, then PATH. A Lazarus that is
 # not on PATH, e.g. in your shell profile:
@@ -14,12 +17,14 @@
 set -eu
 cd "$(dirname "$0")"
 
+OS=$(uname -s)
+
 FPC=${FPC:-$(command -v fpc || true)}
 LAZBUILD=${LAZBUILD:-$(command -v lazbuild || true)}
 X64_ROOT=${X64_ROOT:-$HOME/.fpc/x86_64-darwin}
 
 if [ -z "$LAZBUILD" ] && [ -z "$FPC" ]; then
-    echo 'Neither lazbuild nor fpc found. Install Free Pascal (brew install fpc) or set LAZBUILD / FPC.' >&2
+    echo 'Neither lazbuild nor fpc found. Install Free Pascal (macOS: brew install fpc, Ubuntu/Debian: sudo apt install fpc) or set LAZBUILD / FPC.' >&2
     exit 1
 fi
 
@@ -29,7 +34,7 @@ build_project() {
     if [ -n "$LAZBUILD" ]; then
         "$LAZBUILD" ${FPC:+--compiler="$FPC"} --build-mode= "$lpi"
     else
-        out="$(dirname "$lpr")/lib/$(uname -m)-darwin"
+        out="$(dirname "$lpr")/lib/$(uname -m)-$(echo "$OS" | tr '[:upper:]' '[:lower:]')"
         mkdir -p "$out"
         fu=''
         for d in "$@"; do fu="$fu -Fu$d"; done
@@ -55,6 +60,22 @@ build_x86_64() {
 
 build_project lzscope.lpi lzscope.lpr src/clap src/dsp src/gui src/plugin
 build_project tests/testhost.lpi tests/testhost.lpr src/clap src/dsp
+
+if [ "$OS" = Linux ]; then
+    if ! ./tests/testhost; then
+        echo 'tests failed, not installing'
+        exit 1
+    fi
+    # a CLAP on Linux is the shared library itself
+    cp liblzscope.so lzscope.clap
+    dst="$HOME/.clap"
+    mkdir -p "$dst"
+    # a new file, not rewritten in place: a running host may have it mapped
+    cp lzscope.clap "$dst/lzscope.clap.tmp"
+    mv -f "$dst/lzscope.clap.tmp" "$dst/lzscope.clap"
+    echo "installed -> $dst/lzscope.clap"
+    exit 0
+fi
 
 universal=false
 if [ -x "$X64_ROOT/bin/ppcx64" ]; then

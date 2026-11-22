@@ -79,6 +79,8 @@ type
     stop: LongBool;
     redraw: LongInt;         { atomic; redraw requested }
     thread: TThreadID;
+    hostFd: Integer;         { OS_HOST_EVENTS: registered with the host, -1 = none }
+    hostTimer: UInt32;       { OS_HOST_EVENTS: CLAP timer id, CLAP_INVALID_ID = none }
     scale: Single;           { px per UI unit: 96-dpi pixel, or macOS point }
     msaa: Boolean;
     fontH: Integer;          { px }

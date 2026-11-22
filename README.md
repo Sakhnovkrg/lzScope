@@ -1,4 +1,4 @@
-# lzScope — CLAP oscilloscope for Windows and macOS
+# lzScope — CLAP oscilloscope for Windows, macOS and Linux
 
 ![lzScope](preview.png)
 
@@ -9,7 +9,8 @@ in Free Pascal / Lazarus, with an OpenGL GUI inspired by the Cockos "Oscilloscop
 
 1. Download the zip for your system from the
    **[latest release](https://github.com/Sakhnovkrg/lzScope/releases/latest)**
-   and unpack it (Windows: right-click → Extract All; macOS: double-click).
+   and unpack it (Windows: right-click → Extract All; macOS: double-click;
+   Linux: your file manager's Extract, or `unzip`).
 2. Copy the plugin from it into the CLAP folder (create the folder if it is
    not there):
 
@@ -17,9 +18,11 @@ in Free Pascal / Lazarus, with an OpenGL GUI inspired by the Cockos "Oscilloscop
    |---|---|---|---|
    | Windows | `lzScope-…-windows.zip` | `lzscope.clap` | `C:\Program Files\Common Files\CLAP` |
    | macOS | `lzScope-…-macos.zip` | `lzScope.clap` | `~/Library/Audio/Plug-Ins/CLAP` |
+   | Linux | `lzScope-…-linux.zip` | `lzscope.clap` | `~/.clap` |
 
    On macOS, `~/Library` is hidden: in Finder press **Shift+Cmd+G**, paste
-   the folder path and press Return.
+   the folder path and press Return. On Linux, `~/.clap` is hidden too: press
+   **Ctrl+H** in the file manager, or `mkdir -p ~/.clap && cp lzscope.clap ~/.clap/`.
 3. Restart your DAW or rescan plugins (in REAPER: Options → Preferences →
    Plug-ins → CLAP → Re-scan). lzScope is listed under the vendor DsgDnB.
 
@@ -42,4 +45,6 @@ in Free Pascal / Lazarus, with an OpenGL GUI inspired by the Cockos "Oscilloscop
 - **Windows**: 7 or later, 64-bit
 - **macOS**: 10.13 High Sierra or later on Intel, 11 Big Sur or later on
   Apple Silicon (one universal binary)
+- **Linux**: 64-bit x86, glibc 2.34 or later (Ubuntu 22.04, Debian 12,
+  Fedora 35 or newer), X11 or Wayland with XWayland
 - OpenGL

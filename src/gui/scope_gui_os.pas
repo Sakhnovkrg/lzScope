@@ -26,6 +26,19 @@ const
   { CLAP sizes are points; the scale is the screen's backing scale }
   OS_HOST_SCALE = False;
   OS_VZOOM_KEY  = 'cmd';
+{$ELSEIF DEFINED(LINUX)}
+  OS_WINDOW_API = CLAP_WINDOW_API_X11;
+  { CLAP sizes are physical pixels and the host may set the UI scale }
+  OS_HOST_SCALE = True;
+  OS_VZOOM_KEY  = 'ctrl';
+  { events reach the main thread only through the host: posix-fd-support
+    on OsEventFd, plus a timer for events Xlib has already queued }
+  OS_HOST_EVENTS = True;
+  OS_EVENT_TIMER_MS = 30;
+{$ENDIF}
+{$IF NOT DEFINED(LINUX)}
+  OS_HOST_EVENTS = False;
+  OS_EVENT_TIMER_MS = 0;
 {$ENDIF}
 
 { view, main thread }
@@ -41,6 +54,10 @@ procedure OsViewSetVisible(g: PScopeGui; visible: Boolean);
 { waits for the render thread without blocking what it may wait on }
 procedure OsJoinRenderThread(g: PScopeGui);
 procedure OsGlobalCleanup;
+{ OS_HOST_EVENTS: the fd to watch for reading, -1 = none }
+function OsEventFd(g: PScopeGui): Integer;
+{ OS_HOST_EVENTS: handles what is pending, from the fd or the timer }
+procedure OsPumpEvents(g: PScopeGui);
 
 { any thread; g may be nil }
 
@@ -85,8 +102,21 @@ implementation
   {$I os/scope_os_win32.inc}
 {$ELSEIF DEFINED(DARWIN)}
   {$I os/scope_os_cocoa.inc}
+{$ELSEIF DEFINED(LINUX)}
+  {$I os/scope_os_x11.inc}
 {$ELSE}
   {$FATAL no editor for this platform}
+{$ENDIF}
+
+{$IF NOT DEFINED(LINUX)}
+function OsEventFd(g: PScopeGui): Integer;
+begin
+  Result := -1;
+end;
+
+procedure OsPumpEvents(g: PScopeGui);
+begin
+end;
 {$ENDIF}
 
 end.

@@ -14,6 +14,9 @@ uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
+  {$IFDEF LINUX}
+  BaseUnix,
+  {$ENDIF}
   SysUtils, dynlibs, clap_api, scope_state, logic_tests, testhost_window;
 
 const
@@ -47,11 +50,102 @@ end;
 const
   GHostState: TClapHostState = (mark_dirty: @HostMarkDirty);
 
+{ posix-fd-support and timer-support: how an X11 editor gets its events }
+
+var
+  GEvPlug: PClapPlugin = nil;
+  GFd: Integer = -1;
+  GTimerId: TClapId = CLAP_INVALID_ID;
+
+function HostRegisterFd(host: PClapHost; fd: Int32; flags: UInt32): Boolean; cdecl;
+begin
+  Result := (GFd < 0) and ((flags and CLAP_POSIX_FD_READ) <> 0);
+  if Result then GFd := fd;
+end;
+
+function HostModifyFd(host: PClapHost; fd: Int32; flags: UInt32): Boolean; cdecl;
+begin
+  Result := fd = GFd;
+end;
+
+function HostUnregisterFd(host: PClapHost; fd: Int32): Boolean; cdecl;
+begin
+  Result := fd = GFd;
+  if Result then GFd := -1;
+end;
+
+function HostRegisterTimer(host: PClapHost; period_ms: UInt32;
+  timer_id: PClapId): Boolean; cdecl;
+begin
+  Result := GTimerId = CLAP_INVALID_ID;
+  if Result then
+  begin
+    GTimerId := 1;
+    timer_id^ := GTimerId;
+  end;
+end;
+
+function HostUnregisterTimer(host: PClapHost; timer_id: TClapId): Boolean; cdecl;
+begin
+  Result := timer_id = GTimerId;
+  if Result then GTimerId := CLAP_INVALID_ID;
+end;
+
+const
+  GHostPosixFd: TClapHostPosixFdSupport = (
+    register_fd: @HostRegisterFd;
+    modify_fd: @HostModifyFd;
+    unregister_fd: @HostUnregisterFd
+  );
+  GHostTimer: TClapHostTimerSupport = (
+    register_timer: @HostRegisterTimer;
+    unregister_timer: @HostUnregisterTimer
+  );
+
+{ what a host's event loop does with them }
+procedure DispatchHostEvents(waitMs: Integer);
+{$IFDEF LINUX}
+var
+  pfd: TPollFd;
+  fdExt: PClapPluginPosixFdSupport;
+  timerExt: PClapPluginTimerSupport;
+begin
+  if GEvPlug = nil then Exit;
+  if GFd >= 0 then
+  begin
+    pfd.fd := GFd;
+    pfd.events := POLLIN;
+    pfd.revents := 0;
+    if (fpPoll(@pfd, 1, waitMs) > 0) and ((pfd.revents and POLLIN) <> 0) then
+    begin
+      fdExt := PClapPluginPosixFdSupport(
+        GEvPlug^.get_extension(GEvPlug, CLAP_EXT_POSIX_FD_SUPPORT));
+      if fdExt <> nil then
+        fdExt^.on_fd(GEvPlug, GFd, CLAP_POSIX_FD_READ);
+    end;
+  end;
+  if GTimerId <> CLAP_INVALID_ID then
+  begin
+    timerExt := PClapPluginTimerSupport(
+      GEvPlug^.get_extension(GEvPlug, CLAP_EXT_TIMER_SUPPORT));
+    if timerExt <> nil then
+      timerExt^.on_timer(GEvPlug, GTimerId);
+  end;
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
 function HostGetExtension(host: PClapHost; extension_id: PAnsiChar): Pointer; cdecl;
 begin
   Result := nil;
   if StrComp(extension_id, CLAP_EXT_STATE) = 0 then
-    Result := @GHostState;
+    Result := @GHostState
+  else if StrComp(extension_id, CLAP_EXT_POSIX_FD_SUPPORT) = 0 then
+    Result := @GHostPosixFd
+  else if StrComp(extension_id, CLAP_EXT_TIMER_SUPPORT) = 0 then
+    Result := @GHostTimer;
 end;
 
 procedure HostNoOp(host: PClapHost); cdecl;
@@ -493,6 +587,8 @@ begin
   GHost.request_callback := @HostNoOp;
 
   plug := factory^.create_plugin(factory, @GHost, desc^.id);
+  GEvPlug := plug;
+  OnHostEvents := @DispatchHostEvents;
   if plug = nil then Fail('create_plugin');
   if not plug^.init(plug) then Fail('plugin.init');
   if not plug^.activate(plug, SRATE, 1, NFRAMES) then Fail('activate');

@@ -9,10 +9,13 @@ unit gl_min;
 {$IF DEFINED(WINDOWS)}
   {$DEFINE glcall := stdcall}
   {$DEFINE glimport := stdcall; external 'opengl32.dll'}
-{$ELSE}
+{$ELSEIF DEFINED(DARWIN)}
   {$DEFINE glcall := cdecl}
   {$DEFINE glimport := cdecl; external}
   {$linkframework OpenGL}
+{$ELSE}
+  {$DEFINE glcall := cdecl}
+  {$DEFINE glimport := cdecl; external 'GL'}
 {$ENDIF}
 
 interface
@@ -22,6 +25,8 @@ const
   GL_LIB = 'opengl32.dll';
 {$ELSEIF DEFINED(DARWIN)}
   GL_LIB = '/System/Library/Frameworks/OpenGL.framework/OpenGL';
+{$ELSE}
+  GL_LIB = 'GL';   { libGL.so.1: GLX and GL 1.x }
 {$ENDIF}
 
   GL_COLOR_BUFFER_BIT = $00004000;
@@ -148,6 +153,16 @@ begin
   if GLLib = NilHandle then
     GLLib := LoadLibrary(GL_LIB);
   Result := GetProcedureAddress(GLLib, name);
+end;
+
+{$ELSE}
+
+function glXGetProcAddressARB(name: PAnsiChar): Pointer; cdecl; external GL_LIB;
+
+{ context independent with GLX }
+function GetGLProc(name: PAnsiChar): Pointer;
+begin
+  Result := glXGetProcAddressARB(name);
 end;
 
 {$ENDIF}

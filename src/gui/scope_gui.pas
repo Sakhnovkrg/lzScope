@@ -22,11 +22,86 @@ procedure GuiAdjustSize(inst: PScopeInstance; var w, h: UInt32);
 function GuiShow(inst: PScopeInstance): Boolean;
 function GuiHide(inst: PScopeInstance): Boolean;
 procedure GuiGlobalCleanup;
+{ posix-fd-support / timer-support callbacks, main thread }
+procedure GuiOnFd(inst: PScopeInstance; fd: Integer);
+procedure GuiOnTimer(inst: PScopeInstance; id: UInt32);
 
 implementation
 
 uses
-  scope_gui_types, scope_gui_os, scope_gui_render;
+  clap_api, scope_gui_types, scope_gui_os, scope_gui_render;
+
+{ where events reach the main thread through the host: its fd and timer }
+procedure RegisterHostEvents(g: PScopeGui);
+var
+  host: PClapHost;
+  fdExt: PClapHostPosixFdSupport;
+  timerExt: PClapHostTimerSupport;
+  fd: Integer;
+  id: TClapId;
+begin
+  g^.hostFd := -1;
+  g^.hostTimer := CLAP_INVALID_ID;
+  if not OS_HOST_EVENTS then Exit;
+  host := g^.inst^.host;
+  if (host = nil) or (host^.get_extension = nil) then Exit;
+  fdExt := PClapHostPosixFdSupport(
+    host^.get_extension(host, CLAP_EXT_POSIX_FD_SUPPORT));
+  timerExt := PClapHostTimerSupport(
+    host^.get_extension(host, CLAP_EXT_TIMER_SUPPORT));
+  fd := OsEventFd(g);
+  if (fdExt <> nil) and (fdExt^.register_fd <> nil) and (fd >= 0) then
+    if fdExt^.register_fd(host, fd, CLAP_POSIX_FD_READ) then
+      g^.hostFd := fd;
+  id := CLAP_INVALID_ID;
+  if (timerExt <> nil) and (timerExt^.register_timer <> nil) then
+    if timerExt^.register_timer(host, OS_EVENT_TIMER_MS, @id) then
+      g^.hostTimer := id;
+end;
+
+procedure UnregisterHostEvents(g: PScopeGui);
+var
+  host: PClapHost;
+  fdExt: PClapHostPosixFdSupport;
+  timerExt: PClapHostTimerSupport;
+begin
+  host := g^.inst^.host;
+  if (host = nil) or (host^.get_extension = nil) then Exit;
+  if g^.hostFd >= 0 then
+  begin
+    fdExt := PClapHostPosixFdSupport(
+      host^.get_extension(host, CLAP_EXT_POSIX_FD_SUPPORT));
+    if (fdExt <> nil) and (fdExt^.unregister_fd <> nil) then
+      fdExt^.unregister_fd(host, g^.hostFd);
+    g^.hostFd := -1;
+  end;
+  if g^.hostTimer <> CLAP_INVALID_ID then
+  begin
+    timerExt := PClapHostTimerSupport(
+      host^.get_extension(host, CLAP_EXT_TIMER_SUPPORT));
+    if (timerExt <> nil) and (timerExt^.unregister_timer <> nil) then
+      timerExt^.unregister_timer(host, g^.hostTimer);
+    g^.hostTimer := CLAP_INVALID_ID;
+  end;
+end;
+
+procedure GuiOnFd(inst: PScopeInstance; fd: Integer);
+var
+  g: PScopeGui;
+begin
+  g := PScopeGui(inst^.gui);
+  if (g <> nil) and (fd = g^.hostFd) then
+    OsPumpEvents(g);
+end;
+
+procedure GuiOnTimer(inst: PScopeInstance; id: UInt32);
+var
+  g: PScopeGui;
+begin
+  g := PScopeGui(inst^.gui);
+  if (g <> nil) and (id = g^.hostTimer) then
+    OsPumpEvents(g);
+end;
 
 function ToHost(g: PScopeGui; px: Integer): UInt32;
 begin
@@ -76,6 +151,7 @@ begin
   end;
 
   inst^.gui := g;
+  RegisterHostEvents(g);
   Result := True;
 end;
 
@@ -87,6 +163,7 @@ begin
   g := PScopeGui(inst^.gui);
   if g = nil then Exit;
   inst^.gui := nil;
+  UnregisterHostEvents(g);
 
   g^.stop := True;
   OsJoinRenderThread(g);
