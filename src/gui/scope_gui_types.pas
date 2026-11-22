@@ -7,7 +7,7 @@ unit scope_gui_types;
 interface
 
 uses
-  Windows, scope_state, scope_view;
+  scope_state, scope_view;
 
 const
   ATLAS_FIRST = 32;         { ASCII 32..127 }
@@ -30,13 +30,13 @@ type
   end;
 
   TTextTex = record
-    tex: DWORD;              { 0 = none }
+    tex: DWord;              { 0 = none }
     w, h, ascent: Integer;
   end;
 
   { all UI glyphs in one texture }
   TGlyphAtlas = record
-    tex: DWORD;              { 0 = no font }
+    tex: DWord;              { 0 = no font }
     cellW, cellH, ascent: Integer;
     texW, texH: Integer;
     adv: array[0..ATLAS_COUNT - 1] of Integer;
@@ -63,16 +63,14 @@ type
   PScopeGui = ^TScopeGui;
   TScopeGui = record
     inst: PScopeInstance;
-    wnd: HWND;
-    dc: HDC;
-    glrc: HGLRC;
-    w, h: Integer;
+    native: Pointer;         { the platform's view and GL context, see scope_gui_os }
+    w, h: Integer;           { drawable px }
     sized: Boolean;          { the host has set a size }
     minW: Integer;           { px the status line needs, 0 = not measured }
     stop: LongBool;
     redraw: LongInt;         { atomic; redraw requested }
     thread: TThreadID;
-    scale: Single;           { 1.0 = 96 dpi }
+    scale: Single;           { px per UI unit: 96-dpi pixel, or macOS point }
     msaa: Boolean;
     fontH: Integer;          { px }
     atlas: TGlyphAtlas;
@@ -85,18 +83,18 @@ type
     statusRects: array[0..ST_COUNT - 1] of TStatusRect;
     statusDrag: LongInt;     { pressed item or ST_NONE }
     statusLastY: Integer;
-    statusAccum: Integer;    { px dragged towards the next sync length }
+    statusAccum: Double;     { host units dragged towards the next sync length }
     zoomStart, zoomSpan: Double;   { part of a synced cycle on screen; span 0 = all }
     view: TViewState;        { render thread }
-    viewInfo: TViewInfo;     { last frame, read by the wndproc }
+    viewInfo: TViewInfo;     { last frame, read by the input handlers }
     aboutOpen: Boolean;
     aboutT0: QWord;
-    plasmaProg: DWORD;       { 0 = no GLSL }
+    plasmaProg: DWord;       { 0 = no GLSL }
     plasmaLocT: LongInt;
     plasmaLocK: LongInt;
     plasmaLocRes: LongInt;
     plasmaLocScene: LongInt;
-    sceneTex: DWORD;
+    sceneTex: DWord;
     sceneTexW, sceneTexH: Integer;
     aboutTex: array[0..ABOUT_LINES - 1] of TTextTex;
     aboutTexFontH: Integer;
@@ -106,12 +104,15 @@ type
     verts: array[0..MAX_COLS * 2 - 1] of TVertex;
   end;
 
-{ host scale, else OS DPI }
-function EffectiveScale(inst: PScopeInstance; wnd: HWND): Single;
+{ host scale, else the display's; g may be nil }
+function EffectiveScale(inst: PScopeInstance; g: PScopeGui): Single;
 { ST_NONE if none }
 function StatusItemAt(g: PScopeGui; x, y: Integer): Integer;
 
 implementation
+
+uses
+  scope_gui_os;
 
 function StatusItemAt(g: PScopeGui; x, y: Integer): Integer;
 var
@@ -125,39 +126,12 @@ begin
       Exit(i);
 end;
 
-type
-  TGetDpiForWindow = function(wnd: HWND): UINT; stdcall;
-
-function QueryDpiScale(wnd: HWND): Single;
-var
-  getDpi: TGetDpiForWindow;
-  dc: HDC;
-  dpi: Integer;
-begin
-  getDpi := TGetDpiForWindow(
-    GetProcAddress(GetModuleHandleW('user32.dll'), 'GetDpiForWindow'));
-  dpi := 0;
-  if (wnd <> 0) and (getDpi <> nil) then
-    dpi := Integer(getDpi(wnd));
-  if dpi <= 0 then
-  begin
-    dc := GetDC(0);
-    if dc <> 0 then
-    begin
-      dpi := GetDeviceCaps(dc, LOGPIXELSX);
-      ReleaseDC(0, dc);
-    end;
-  end;
-  if dpi <= 0 then dpi := 96;
-  Result := dpi / 96.0;
-end;
-
-function EffectiveScale(inst: PScopeInstance; wnd: HWND): Single;
+function EffectiveScale(inst: PScopeInstance; g: PScopeGui): Single;
 begin
   if (inst <> nil) and (inst^.guiScale > 0.01) then
     Result := inst^.guiScale
   else
-    Result := QueryDpiScale(wnd);
+    Result := OsDisplayScale(g);
   if Result < 1.0 then Result := 1.0;
   if Result > 8.0 then Result := 8.0;
 end;

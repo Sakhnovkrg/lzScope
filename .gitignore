@@ -13,7 +13,10 @@ backup/
 # --- binaries ---
 *.exe
 *.dll
+*.dylib
 *.clap
+tests/testhost
+tests/testhost-x86_64
 
 # --- editor/IDE leftovers ---
 *.bak
@@ -24,3 +27,7 @@ fpcdebug.txt
 # --- OS noise ---
 Thumbs.db
 Desktop.ini
+.DS_Store
+
+# --- release archives ---
+dist/

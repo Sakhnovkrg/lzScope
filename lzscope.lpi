@@ -117,6 +117,14 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
+        <Filename Value="src\gui\scope_gui_os.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src\gui\scope_gui_input.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
         <Filename Value="src\plugin\scope_plugin.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>

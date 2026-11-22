@@ -1,21 +1,25 @@
 program testhost;
 
-{ Minimal CLAP host for lzscope.dll.
+{ Minimal CLAP host for the plugin library.
   No args: run all tests. -i: interactive demo window. }
 
 {$mode objfpc}{$H+}
 {$packrecords c}
 {$pointermath on}
-{$apptype console}
+{$IFDEF WINDOWS}
+  {$apptype console}
+{$ENDIF}
 
 uses
-  SysUtils, Windows, clap_api, scope_state, logic_tests;
+  {$IFDEF UNIX}
+  cthreads,
+  {$ENDIF}
+  SysUtils, dynlibs, clap_api, scope_state, logic_tests, testhost_window;
 
 const
   NFRAMES = 512;
   SRATE = 48000.0;
   TWO_PI = 2 * Pi;
-  HOST_CLASS: PWideChar = 'lzScopeTestHostWnd';
 
 var
   GHost: TClapHost;
@@ -80,40 +84,22 @@ begin
   Result := True;
 end;
 
-function HostWndProc(hw: HWND; msg: UINT; wp: WPARAM; lp: LPARAM): LRESULT; stdcall;
-var
-  cw, ch: Integer;
+{ the host window's events }
+
+procedure HostResized(w, h: Integer);
 begin
-  case msg of
-    WM_SIZE:
-      if (GGuiExt <> nil) and (GPlug <> nil) then
-      begin
-        cw := Integer(lp and $FFFF);
-        ch := Integer((lp shr 16) and $FFFF);
-        if (cw > 0) and (ch > 0) then
-          GGuiExt^.set_size(GPlug, cw, ch);
-        Exit(0);
-      end;
-    WM_CLOSE:
-      begin
-        { destroy the editor before its parent }
-        if GGuiExt <> nil then
-        begin
-          GGuiExt^.hide(GPlug);
-          GGuiExt^.destroy(GPlug);
-          GGuiExt := nil;
-        end;
-        DestroyWindow(hw);
-        Exit(0);
-      end;
-    WM_DESTROY:
-      begin
-        GRunning := False;
-        PostQuitMessage(0);
-        Exit(0);
-      end;
+  if (GGuiExt <> nil) and (GPlug <> nil) then
+    GGuiExt^.set_size(GPlug, w, h);
+end;
+
+procedure HostClosed;
+begin
+  if GGuiExt <> nil then
+  begin
+    GGuiExt^.hide(GPlug);
+    GGuiExt^.destroy(GPlug);
+    GGuiExt := nil;
   end;
-  Result := DefWindowProcW(hw, msg, wp, lp);
 end;
 
 procedure Fail(const msg: string);
@@ -164,7 +150,7 @@ begin
 end;
 
 var
-  lib: HMODULE;
+  lib: TLibHandle;
   entry: PClapPluginEntry;
   factory: PClapPluginFactory;
   desc: PClapPluginDescriptor;
@@ -176,7 +162,7 @@ var
   oldState: array[0..4] of Double;
   nanBits: Int64;
   guiExt: PClapPluginGui;
-  dllPath: AnsiString;
+  libPath: AnsiString;
   bufL, bufR, outL, outR: array[0..NFRAMES - 1] of Single;
   inPtrs, outPtrs: array[0..1] of PSingle;
   inBuf, outBuf: TClapAudioBuffer;
@@ -191,12 +177,9 @@ var
   lfoPhase: Double = 0;
   samplesFed: QWord = 0;
   target: QWord;
-  rectCl: TRect;
-  wc: WNDCLASSW;
-  hostWnd, childWnd: HWND;
   clapWin: TClapWindow;
   gw, gh: UInt32;
-  m: MSG;
+  cw, ch: Integer;
   t0: QWord;
   apiName: PAnsiChar;
   floating: Boolean;
@@ -208,27 +191,28 @@ begin
   if not paramsExt^.get_value(plug, id, @Result) then Fail('get_value');
 end;
 
-function MouseLP(x, y: Integer): LPARAM;
-begin
-  Result := LPARAM(((y and $FFFF) shl 16) or (x and $FFFF));
-end;
-
 { press, move by (dx, dy), release }
 procedure MouseDrag(x, y, dx, dy: Integer);
 var
   k: Integer;
 begin
-  SendMessageW(childWnd, WM_LBUTTONDOWN, MK_LBUTTON, MouseLP(x, y));
+  EditorPress(x, y);
   for k := 1 to 4 do
-    SendMessageW(childWnd, WM_MOUSEMOVE, MK_LBUTTON,
-      MouseLP(x + dx * k div 4, y + dy * k div 4));
-  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(x + dx, y + dy));
+    EditorMove(x + dx * k div 4, y + dy * k div 4);
+  EditorRelease(x + dx, y + dy);
 end;
 
 procedure MouseClick(x, y: Integer);
 begin
-  SendMessageW(childWnd, WM_LBUTTONDOWN, MK_LBUTTON, MouseLP(x, y));
-  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(x, y));
+  EditorPress(x, y);
+  EditorRelease(x, y);
+end;
+
+{ the second click of a double click }
+procedure MouseDoubleClick(x, y: Integer);
+begin
+  EditorPress(x, y, True);
+  EditorRelease(x, y);
 end;
 
 procedure ProcessSineBlock; forward;
@@ -275,18 +259,17 @@ begin
      (Abs(GLastOutParamVal - z0) > 1e-9) then
     Fail('status: range drag not reported to the host');
   if GDirtyCalls = 0 then Fail('status: host state not marked dirty');
-  SendMessageW(childWnd, WM_LBUTTONDBLCLK, MK_LBUTTON, MouseLP(xRange, sy));
-  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(xRange, sy));
+  MouseDoubleClick(xRange, sy);
   if ParamNow(PARAM_VZOOM_DB) <> 0.0 then Fail('status: double click did not reset range');
 
   { v-zoom stops at 0 dB }
   SetParamNow(PARAM_VZOOM_DB, -1.28);
-  SendMessageW(childWnd, WM_MOUSEWHEEL, WPARAM((-120 and $FFFF) shl 16) or MK_CONTROL, 0);
+  EditorWheel(0, 0, -1, True);
   if ParamNow(PARAM_VZOOM_DB) <> 0.0 then
     Fail(Format('v-zoom: step over 0 dB gave %.3f, expected 0', [ParamNow(PARAM_VZOOM_DB)]));
-  SendMessageW(childWnd, WM_MOUSEWHEEL, WPARAM((-120 and $FFFF) shl 16) or MK_CONTROL, 0);
+  EditorWheel(0, 0, -1, True);
   if Abs(ParamNow(PARAM_VZOOM_DB) - 3.0) > 1e-9 then Fail('v-zoom: step from 0 dB');
-  SendMessageW(childWnd, WM_MOUSEWHEEL, WPARAM(240 shl 16) or MK_CONTROL, 0);
+  EditorWheel(0, 0, 2, True);
   if ParamNow(PARAM_VZOOM_DB) <> 0.0 then Fail('v-zoom: step back over 0 dB should stop there');
 
   { trig: first spot right of range that reacts to a click }
@@ -302,8 +285,8 @@ begin
   if ParamNow(PARAM_RETRIG) <> 1.0 then Fail('status: trig click should step to "any"');
   if ParamNow(PARAM_HOLD) >= 0.5 then Fail('status: probing toggled hold');
   { released off trig: not a click }
-  SendMessageW(childWnd, WM_LBUTTONDOWN, MK_LBUTTON, MouseLP(xTrig, sy));
-  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(xTrig, sy + Round(150 * scale)));
+  EditorPress(xTrig, sy);
+  EditorRelease(xTrig, sy + Round(150 * scale));
   if ParamNow(PARAM_RETRIG) <> 1.0 then Fail('status: release off trig still clicked');
   if ParamNow(PARAM_HOLD) >= 0.5 then Fail('status: release off trig toggled hold');
 
@@ -336,14 +319,12 @@ begin
   v1 := ParamNow(PARAM_VIEW_MS);
   if Abs(v1 / v0 - Exp(0.5)) > 1e-6 then
     Fail(Format('status: len drag %.3f -> %.3f, expected x%.4f', [v0, v1, Exp(0.5)]));
-  SendMessageW(childWnd, WM_LBUTTONDBLCLK, MK_LBUTTON, MouseLP(xLen, sy));
-  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(xLen, sy));
+  MouseDoubleClick(xLen, sy);
   if ParamNow(PARAM_VIEW_MS) <> 2740.0 then Fail('status: double click did not reset len');
 
   { a double click elsewhere is two clicks }
   MouseClick(400, Round(200 * scale));
-  SendMessageW(childWnd, WM_LBUTTONDBLCLK, MK_LBUTTON, MouseLP(400, Round(200 * scale)));
-  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(400, Round(200 * scale)));
+  MouseDoubleClick(400, Round(200 * scale));
   if ParamNow(PARAM_HOLD) >= 0.5 then Fail('double click should toggle hold twice');
 
   { sync: with a host transport, len picks the number of bars instead }
@@ -359,13 +340,12 @@ begin
   MouseDrag(xLen, sy, 0, -40);   { two steps of 18 px }
   if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT + 2 then
     Fail(Format('sync: len drag gave index %.0f', [ParamNow(PARAM_SYNC_LEN)]));
-  SendMessageW(childWnd, WM_LBUTTONDBLCLK, MK_LBUTTON, MouseLP(xLen, sy));
-  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(xLen, sy));
+  MouseDoubleClick(xLen, sy);
   if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT then Fail('sync: double click did not reset the length');
   { the wheel zooms inside the cycle and never changes its length }
-  SendMessageW(childWnd, WM_MOUSEWHEEL, WPARAM(120) shl 16, 0);
+  EditorWheel(0, 0, 1);
   for x := 1 to 4 do
-    SendMessageW(childWnd, WM_MOUSEWHEEL, WPARAM((-120 and $FFFF) shl 16), 0);
+    EditorWheel(0, 0, -1);
   if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT then Fail('sync: the wheel changed the length');
 
   if ParamNow(PARAM_VIEW_MS) <> v0 then Fail('sync: view size changed while synced');
@@ -383,8 +363,7 @@ begin
   if ParamNow(PARAM_SYNC_LEN) <> SYNC_LEN_DEFAULT + 1 then
     Fail('sync: len should set bars without a host tempo too');
   if ParamNow(PARAM_VIEW_MS) <> v0 then Fail('sync: view size changed without a host tempo');
-  SendMessageW(childWnd, WM_LBUTTONDBLCLK, MK_LBUTTON, MouseLP(xLen, sy));
-  SendMessageW(childWnd, WM_LBUTTONUP, 0, MouseLP(xLen, sy));
+  MouseDoubleClick(xLen, sy);
   SetParamNow(PARAM_SYNC, 0.0);
   for x := 1 to 10 do
   begin
@@ -394,18 +373,6 @@ begin
 
   SetParamNow(PARAM_VIEW_MS, 50.0);
   WriteLn('status line controls: ok');
-end;
-
-procedure PumpMessages;
-var
-  mm: MSG;
-begin
-  while PeekMessageW(@mm, 0, 0, 0, PM_REMOVE) do
-  begin
-    if mm.message = WM_QUIT then GRunning := False;
-    TranslateMessage(@mm);
-    DispatchMessageW(@mm);
-  end;
 end;
 
 var
@@ -486,19 +453,19 @@ begin
     RunStressTest;
   end;
 
-  { the dll sits next to the exe or one directory up }
-  dllPath := ExtractFilePath(ParamStr(0)) + 'lzscope.dll';
-  if not FileExists(dllPath) then
-    dllPath := ExtractFilePath(ParamStr(0)) + '..\lzscope.dll';
-  if not FileExists(dllPath) then Fail('lzscope.dll not found near ' + ParamStr(0));
+  { the library sits next to the exe or one directory up }
+  libPath := ExtractFilePath(ParamStr(0)) + PLUGIN_LIB;
+  if not FileExists(libPath) then
+    libPath := ExtractFilePath(ParamStr(0)) + '..' + PathDelim + PLUGIN_LIB;
+  if not FileExists(libPath) then Fail(PLUGIN_LIB + ' not found near ' + ParamStr(0));
 
-  lib := LoadLibraryA(PAnsiChar(dllPath));
-  if lib = 0 then Fail('LoadLibrary: ' + dllPath);
+  lib := LoadLibrary(libPath);
+  if lib = NilHandle then Fail('LoadLibrary: ' + libPath);
 
-  entry := PClapPluginEntry(GetProcAddress(lib, 'clap_entry'));
+  entry := PClapPluginEntry(GetProcedureAddress(lib, 'clap_entry'));
   if entry = nil then Fail('clap_entry symbol not found');
   if entry^.clap_version.major < 1 then Fail('bad clap version');
-  if not entry^.init(PAnsiChar(dllPath)) then Fail('entry.init');
+  if not entry^.init(PAnsiChar(libPath)) then Fail('entry.init');
 
   factory := PClapPluginFactory(entry^.get_factory(CLAP_PLUGIN_FACTORY_ID));
   if factory = nil then Fail('get_factory');
@@ -626,35 +593,23 @@ begin
   { GUI smoke test }
   guiExt := PClapPluginGui(plug^.get_extension(plug, CLAP_EXT_GUI));
   if guiExt = nil then Fail('gui extension missing');
-  if not guiExt^.is_api_supported(plug, CLAP_WINDOW_API_WIN32, False) then
-    Fail('win32 embedded api not supported');
+  if not guiExt^.is_api_supported(plug, HOST_WINDOW_API, False) then
+    Fail(HOST_WINDOW_API + ' embedded api not supported');
   if not guiExt^.get_preferred_api(plug, @apiName, @floating) then
     Fail('get_preferred_api');
   WriteLn('preferred api: ', apiName, ' floating=', floating);
 
-  FillChar(wc, SizeOf(wc), 0);
-  wc.lpfnWndProc := @HostWndProc;
-  wc.hInstance := HInstance;
-  wc.hCursor := LoadCursor(0, IDC_ARROW);
-  wc.lpszClassName := HOST_CLASS;
-  if RegisterClassW(wc) = 0 then Fail('RegisterClassW');
-
-  if not guiExt^.create(plug, CLAP_WINDOW_API_WIN32, False) then Fail('gui.create');
+  if not guiExt^.create(plug, HOST_WINDOW_API, False) then Fail('gui.create');
   { the order hosts use: create, set_scale, get_size }
   if GScale > 0 then guiExt^.set_scale(plug, GScale);
   if not guiExt^.get_size(plug, @gw, @gh) then Fail('gui.get_size');
   WriteLn(Format('gui size: %dx%d', [gw, gh]));
 
-  rectCl.Left := 0; rectCl.Top := 0;
-  rectCl.Right := gw; rectCl.Bottom := gh;
-  AdjustWindowRect(@rectCl, WS_OVERLAPPEDWINDOW, False);
-  hostWnd := CreateWindowExW(0, HOST_CLASS, 'lzScope testhost',
-    WS_OVERLAPPEDWINDOW or WS_VISIBLE, 100, 100,
-    rectCl.Right - rectCl.Left, rectCl.Bottom - rectCl.Top,
-    0, 0, HInstance, nil);
-  if hostWnd = 0 then Fail('host window');
-  clapWin.api := CLAP_WINDOW_API_WIN32;
-  clapWin.handle := {%H-}Pointer(hostWnd);
+  OnHostResize := @HostResized;
+  OnHostClose := @HostClosed;
+  if not HostWindowOpen(gw, gh, 'lzScope testhost') then Fail('host window');
+  clapWin.api := HOST_WINDOW_API;
+  clapWin.handle := HostWindowHandle;
   if not guiExt^.set_parent(plug, @clapWin) then Fail('gui.set_parent');
   if not guiExt^.show(plug) then Fail('gui.show');
 
@@ -675,17 +630,16 @@ begin
     GPlug := plug;
     GGuiExt := guiExt;
 
-    GetClientRect(hostWnd, @rectCl);
-    guiExt^.set_size(plug, rectCl.Right, rectCl.Bottom);
-    ShowWindow(GetConsoleWindow, SW_MINIMIZE);
-    SetForegroundWindow(hostWnd);
+    HostWindowClientSize(cw, ch);
+    guiExt^.set_size(plug, cw, ch);
+    HostWindowFocus;
 
     { feed audio in real time }
     t0 := GetTickCount64;
     samplesFed := 0;
     while GRunning do
     begin
-      PumpMessages;
+      GRunning := HostPump;
       target := QWord(GetTickCount64 - t0) * 48;
       while samplesFed < target do
       begin
@@ -699,10 +653,9 @@ begin
   else
   begin
     { wheel -> gesture + value events }
-    childWnd := GetWindow(hostWnd, GW_CHILD);
-    if childWnd = 0 then Fail('plugin child window not found');
+    if not EditorFind then Fail('plugin child window not found');
     GOutEvents := 0;
-    SendMessageW(childWnd, WM_MOUSEWHEEL, WPARAM(120) shl 16, 0);
+    EditorWheel(0, 0, 1);
     ProcessSineBlock;
     if GOutEvents < 3 then
       Fail(Format('expected >=3 out events (gesture+value), got %d', [GOutEvents]));
@@ -714,32 +667,28 @@ begin
     WriteLn(Format('gui->host params: ok (view size now %.2f ms)', [v]));
 
     { about: open, then a click closes it without toggling hold }
-    SendMessageW(childWnd, WM_LBUTTONDOWN, MK_LBUTTON, LPARAM(15 shl 16) or 785);
-    SendMessageW(childWnd, WM_LBUTTONUP, 0, LPARAM(15 shl 16) or 785);
+    MouseClick(785, 15);
     t0 := GetTickCount64;
     while GetTickCount64 - t0 < 300 do
     begin
-      PumpMessages;
+      HostPump;
       ProcessSineBlock;
       Sleep(10);
     end;
-    SendMessageW(childWnd, WM_LBUTTONDOWN, MK_LBUTTON, LPARAM(200 shl 16) or 400);
-    SendMessageW(childWnd, WM_LBUTTONUP, 0, LPARAM(200 shl 16) or 400);
+    MouseClick(400, 200);
     if not paramsExt^.get_value(plug, PARAM_HOLD, @v) then Fail('get hold');
     if v >= 0.5 then Fail('click on about overlay must close it, not toggle hold');
-    SendMessageW(childWnd, WM_LBUTTONDOWN, MK_LBUTTON, LPARAM(200 shl 16) or 400);
-    SendMessageW(childWnd, WM_LBUTTONUP, 0, LPARAM(200 shl 16) or 400);
+    MouseClick(400, 200);
     if not paramsExt^.get_value(plug, PARAM_HOLD, @v) then Fail('get hold 2');
     if v < 0.5 then Fail('plain click should toggle hold on');
-    SendMessageW(childWnd, WM_LBUTTONDOWN, MK_LBUTTON, LPARAM(200 shl 16) or 400);
-    SendMessageW(childWnd, WM_LBUTTONUP, 0, LPARAM(200 shl 16) or 400);
+    MouseClick(400, 200);
     WriteLn('about overlay + click routing: ok');
 
     { let the render thread run }
     t0 := GetTickCount64;
     while GetTickCount64 - t0 < 1500 do
     begin
-      PumpMessages;
+      HostPump;
       ProcessSineBlock;
       Sleep(10);
     end;
@@ -750,7 +699,7 @@ begin
     t0 := GetTickCount64;
     while GetTickCount64 - t0 < 300 do
     begin
-      PumpMessages;
+      HostPump;
       ProcessSineBlock;
       Sleep(10);
     end;
@@ -758,13 +707,13 @@ begin
 
     guiExt^.hide(plug);
     guiExt^.destroy(plug);
-    DestroyWindow(hostWnd);
   end;
+  HostWindowFree;
 
   plug^.stop_processing(plug);
   plug^.deactivate(plug);
   plug^.destroy(plug);
   entry^.deinit();
-  FreeLibrary(lib);
+  UnloadLibrary(lib);
   WriteLn('ALL TESTS PASSED');
 end.

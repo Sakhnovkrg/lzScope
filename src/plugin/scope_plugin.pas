@@ -14,6 +14,7 @@ function EntryInit(plugin_path: PAnsiChar): Boolean; cdecl;
 procedure EntryDeinit; cdecl;
 function EntryGetFactory(factory_id: PAnsiChar): Pointer; cdecl;
 
+{ a C symbol: Darwin can only export variables under their own name }
 var
   clap_entry: TClapPluginEntry = (
     clap_version: (major: CLAP_VERSION_MAJOR; minor: CLAP_VERSION_MINOR;
@@ -21,12 +22,12 @@ var
     init: @EntryInit;
     deinit: @EntryDeinit;
     get_factory: @EntryGetFactory
-  );
+  ); cvar; export;
 
 implementation
 
 uses
-  SysUtils, scope_state, scope_dsp, scope_gui;
+  SysUtils, scope_state, scope_dsp, scope_gui, scope_gui_os;
 
 const
   STATE_MAGIC_V0 = $4C5A5030; { 'LZP0': PARAM_COUNT_V0 doubles }
@@ -57,7 +58,7 @@ const
     features: @ScopeFeatures[0]
   );
 
-  WIN32_API_NAME: PAnsiChar = CLAP_WINDOW_API_WIN32;
+  WINDOW_API_NAME: PAnsiChar = OS_WINDOW_API;
 
 { audio-ports }
 
@@ -367,14 +368,14 @@ const
 function GuiExtIsApiSupported(plugin: PClapPlugin; api: PAnsiChar;
   is_floating: Boolean): Boolean; cdecl;
 begin
-  Result := (api <> nil) and (StrComp(api, CLAP_WINDOW_API_WIN32) = 0) and
+  Result := (api <> nil) and (StrComp(api, OS_WINDOW_API) = 0) and
     not is_floating;
 end;
 
 function GuiExtGetPreferredApi(plugin: PClapPlugin; api: PPAnsiChar;
   is_floating: PBoolean): Boolean; cdecl;
 begin
-  api^ := WIN32_API_NAME;
+  api^ := WINDOW_API_NAME;
   is_floating^ := False;
   Result := True;
 end;

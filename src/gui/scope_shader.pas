@@ -7,7 +7,7 @@ unit scope_shader;
 interface
 
 uses
-  Windows, gl_min;
+  gl_min;
 
 const
   { about overlay: warped scene + plasma glow }
@@ -36,10 +36,10 @@ const
     '}';
 
 { 0 on failure }
-function CompileFragmentProgram(src: PAnsiChar): DWORD;
-procedure DeleteShaderProgram(prog: DWORD);
-procedure UseShaderProgram(prog: DWORD);
-function GetShaderUniform(prog: DWORD; name: PAnsiChar): LongInt;
+function CompileFragmentProgram(src: PAnsiChar): DWord;
+procedure DeleteShaderProgram(prog: DWord);
+procedure UseShaderProgram(prog: DWord);
+function GetShaderUniform(prog: DWord; name: PAnsiChar): LongInt;
 procedure SetUniform1f(loc: LongInt; v: Single);
 procedure SetUniform2f(loc: LongInt; x, y: Single);
 procedure SetUniform1i(loc: LongInt; v: LongInt);
@@ -72,25 +72,25 @@ begin
   if InterlockedCompareExchange(LoadState, 1, 0) <> 0 then
   begin
     while LoadState <> 2 do
-      Sleep(0);
+      ThreadSwitch;
     Exit;
   end;
-  pglCreateShader := TglCreateShader(wglGetProcAddress('glCreateShader'));
-  pglShaderSource := TglShaderSource(wglGetProcAddress('glShaderSource'));
-  pglCompileShader := TglCompileShader(wglGetProcAddress('glCompileShader'));
-  pglGetShaderiv := TglGetShaderiv(wglGetProcAddress('glGetShaderiv'));
-  pglCreateProgram := TglCreateProgram(wglGetProcAddress('glCreateProgram'));
-  pglAttachShader := TglAttachShader(wglGetProcAddress('glAttachShader'));
-  pglLinkProgram := TglLinkProgram(wglGetProcAddress('glLinkProgram'));
-  pglGetProgramiv := TglGetProgramiv(wglGetProcAddress('glGetProgramiv'));
-  pglUseProgram := TglUseProgram(wglGetProcAddress('glUseProgram'));
+  pglCreateShader := TglCreateShader(GetGLProc('glCreateShader'));
+  pglShaderSource := TglShaderSource(GetGLProc('glShaderSource'));
+  pglCompileShader := TglCompileShader(GetGLProc('glCompileShader'));
+  pglGetShaderiv := TglGetShaderiv(GetGLProc('glGetShaderiv'));
+  pglCreateProgram := TglCreateProgram(GetGLProc('glCreateProgram'));
+  pglAttachShader := TglAttachShader(GetGLProc('glAttachShader'));
+  pglLinkProgram := TglLinkProgram(GetGLProc('glLinkProgram'));
+  pglGetProgramiv := TglGetProgramiv(GetGLProc('glGetProgramiv'));
+  pglUseProgram := TglUseProgram(GetGLProc('glUseProgram'));
   pglGetUniformLocation :=
-    TglGetUniformLocation(wglGetProcAddress('glGetUniformLocation'));
-  pglUniform1f := TglUniform1f(wglGetProcAddress('glUniform1f'));
-  pglUniform2f := TglUniform2f(wglGetProcAddress('glUniform2f'));
-  pglUniform1i := TglUniform1i(wglGetProcAddress('glUniform1i'));
-  pglDeleteShader := TglDeleteShader(wglGetProcAddress('glDeleteShader'));
-  pglDeleteProgram := TglDeleteProgram(wglGetProcAddress('glDeleteProgram'));
+    TglGetUniformLocation(GetGLProc('glGetUniformLocation'));
+  pglUniform1f := TglUniform1f(GetGLProc('glUniform1f'));
+  pglUniform2f := TglUniform2f(GetGLProc('glUniform2f'));
+  pglUniform1i := TglUniform1i(GetGLProc('glUniform1i'));
+  pglDeleteShader := TglDeleteShader(GetGLProc('glDeleteShader'));
+  pglDeleteProgram := TglDeleteProgram(GetGLProc('glDeleteProgram'));
   OK := (pglCreateShader <> nil) and (pglShaderSource <> nil) and
     (pglCompileShader <> nil) and (pglGetShaderiv <> nil) and
     (pglCreateProgram <> nil) and (pglAttachShader <> nil) and
@@ -102,9 +102,9 @@ begin
   InterlockedExchange(LoadState, 2);
 end;
 
-function CompileFragmentProgram(src: PAnsiChar): DWORD;
+function CompileFragmentProgram(src: PAnsiChar): DWord;
 var
-  sh, prog: DWORD;
+  sh, prog: DWord;
   ok1: LongInt;
 begin
   Result := 0;
@@ -137,19 +137,19 @@ begin
   Result := prog;
 end;
 
-procedure DeleteShaderProgram(prog: DWORD);
+procedure DeleteShaderProgram(prog: DWord);
 begin
   if (prog <> 0) and OK then
     pglDeleteProgram(prog);
 end;
 
-procedure UseShaderProgram(prog: DWORD);
+procedure UseShaderProgram(prog: DWord);
 begin
   if OK then
     pglUseProgram(prog);
 end;
 
-function GetShaderUniform(prog: DWORD; name: PAnsiChar): LongInt;
+function GetShaderUniform(prog: DWord; name: PAnsiChar): LongInt;
 begin
   if OK then
     Result := pglGetUniformLocation(prog, name)
