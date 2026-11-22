@@ -25,12 +25,15 @@ const
   TrigNamesS: array[0..RETRIG_COUNT - 1] of string[10] =
     ('instant', 'any', 'ascending', 'descending');
   { the longest the status line gets }
-  STATUS_WIDEST = 'len 1/2 bar x999.9  range -60.0dB  trig descending  sync (no tempo)';
+  STATUS_WIDEST = 'len 1/2 bar x999.9  range -60.0dB  trig descending  sync (no tempo)  split';
 
 type
   TFrame = record
     w, h: Integer;
     px: Single;            { UI scale }
+    split: Boolean;
+    yMid: Integer;         { split view: where the lanes meet }
+    yTop, yBot: Single;    { lane of the channel being drawn }
     yCent, scopeH: Single;
     sc: Single;            { px per unit of amplitude }
     vzoom, viewMs: Double;
@@ -139,14 +142,15 @@ end;
 
 { draw passes }
 
-{ sync view: lines on bars and beats, labelled bar.beat from the cycle start }
+{ sync view: lines on bars, beats and finer; labelled bar.beat.sixteenth
+  from the cycle start }
 procedure DrawBeatGrid(g: PScopeGui; const f: TFrame);
 const
   Steps: array[0..8] of Double =
     (1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1);   { beats }
 var
   bpb, lenBeats, step, p, beat, first, visBeats, labelEnd: Double;
-  i, k, bar, x: Integer;
+  i, k, bar, x, q: Integer;
   s, s2: ShortString;
 begin
   bpb := f.vi.beatsPerBar;
@@ -179,29 +183,34 @@ begin
     bar := Trunc(p / bpb + 1e-9);
     beat := p - bar * bpb;
     x := Round(f.w * (p - first) / visBeats);
-    if beat < 1e-9 then
-      glColor4f(0.6, 0.6, 0.6, 0.38)   { bar line }
+    { whole sixteenths get a label, anything finer only a faint line }
+    q := Round(beat * 4);
+    if Abs(beat * 4 - q) > 1e-6 then q := -1;
+    if q = 0 then
+      glColor4f(0.6, 0.6, 0.6, 0.42)   { bar }
+    else if (q > 0) and (q mod 4 = 0) then
+      glColor4f(0.6, 0.6, 0.6, 0.28)   { beat }
+    else if q > 0 then
+      glColor4f(0.6, 0.6, 0.6, 0.16)
     else
-      glColor4f(0.6, 0.6, 0.6, 0.18);
+      glColor4f(0.6, 0.6, 0.6, 0.08);
     glBegin(GL_LINES);
     glVertex2f(x, 0); glVertex2f(x, f.h);
     glEnd;
 
-    if Abs(beat - Round(beat)) < 1e-9 then
-      Str(Round(beat) + 1, s)
-    else
+    Str(bar + 1, s);
+    if q > 0 then
     begin
-      Str((beat + 1): 0: 3, s);
-      while s[Length(s)] = '0' do
-        SetLength(s, Length(s) - 1);
+      Str(q div 4 + 1, s2);
+      s := s + '.' + s2;
     end;
-    if f.vi.lenBars > 1 then
+    if (q > 0) and (q mod 4 <> 0) then
     begin
-      Str(bar + 1, s2);
-      s := s2 + '.' + s;
+      Str(q mod 4 + 1, s2);
+      s := s + '.' + s2;
     end;
     { skip a label that would run into the previous one }
-    if x + 5 * f.px >= labelEnd then
+    if (q >= 0) and (x + 5 * f.px >= labelEnd) then
     begin
       glColor4f(0.75, 0.75, 0.75, 0.55);
       DrawTextGL(g, x + 5 * f.px, f.h - 9 * f.px, s);
@@ -211,10 +220,28 @@ begin
   end;
 end;
 
-procedure DrawGrid(g: PScopeGui; const f: TFrame);
+{ lane of channel idx: the whole window, or its half in split view }
+procedure SetLane(var f: TFrame; idx: Integer);
+begin
+  f.yTop := 0;
+  f.yBot := f.h;
+  if f.split and (idx = 0) then
+  begin
+    f.yTop := 26 * f.px;   { below the status line }
+    f.yBot := f.yMid;
+  end;
+  if f.split and (idx = 1) then f.yTop := f.yMid;
+  f.yCent := (f.yTop + f.yBot) * 0.5;
+  f.scopeH := (f.yBot - f.yTop) * 0.5 - 4 * f.px;
+  if f.scopeH < 10 then f.scopeH := 10;
+  f.sc := Exp(-f.vzoom * LN10_OVER_20) * f.scopeH;
+end;
+
+{ center line and dB scale of the current lane }
+procedure DrawLevelGrid(g: PScopeGui; const f: TFrame);
 var
-  iter, gridStep, x: Integer;
-  v, t: Double;
+  iter: Integer;
+  v: Double;
   a, ly: Single;
   s: ShortString;
 begin
@@ -238,7 +265,9 @@ begin
       glVertex2f(0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
       glVertex2f(0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
       glEnd;
-      if iter > 1 then   { outermost line unlabeled }
+      { outermost line unlabeled; the red 0 dB label wins over a close one }
+      if (iter > 1) and
+         ((f.vzoom <= 0) or (Abs(a - f.sc) > g^.fontH + 6 * f.px)) then
       begin
         FormatDb(v, s);
         glColor4f(0.75, 0.75, 0.75, 0.55);
@@ -254,7 +283,7 @@ begin
   if f.vzoom > 0 then
   begin
     a := f.sc;
-    glColor4f(1.0, 0.3, 0.3, 0.75);
+    glColor4f(0.85, 0.35, 0.35, 0.5);
     glBegin(GL_LINES);
     glVertex2f(0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
     glVertex2f(0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
@@ -263,32 +292,72 @@ begin
     DrawTextGL(g, 8 * f.px, f.yCent - a - 5 * f.px, s);
     DrawTextGL(g, 8 * f.px, f.yCent + a + g^.fontH + 4, s);
   end;
+end;
 
+{ grid label: round values without the trailing zeros }
+procedure FormatGridTime(ms: Double; out s: ShortString);
+var
+  u: string[2];
+begin
+  u := 'ms';
+  if ms >= 1000 then
+  begin
+    ms := ms / 1000;
+    u := 's';
+  end;
+  if Abs(ms - Round(ms)) < 1e-6 then
+    Str(Round(ms), s)
+  else
+    Str(ms: 0: 1, s);
+  s := s + u;
+end;
+
+procedure DrawTimeGrid(g: PScopeGui; const f: TFrame);
+const
+  Mult: array[0..2] of Double = (1, 2, 5);
+var
+  i, k, x: Integer;
+  step, t: Double;
+  s: ShortString;
+begin
   if f.vi.sweep then
   begin
     DrawBeatGrid(g, f);
     Exit;
   end;
 
-  { time grid, from the right edge }
-  gridStep := Round(72 * f.px);
-  x := f.w - gridStep;
-  while x > 24 * f.px do
+  { time back from the right edge, in the smallest 1-2-5 step that fits }
+  step := 0;
+  for i := 0 to 17 do
   begin
+    t := Mult[i mod 3] * 0.1 * IntPower(10, i div 3);   { 0.1 ms .. 50 s }
+    if f.w * t / f.viewMs >= 72 * f.px then
+    begin
+      step := t;
+      Break;
+    end;
+  end;
+  if step = 0 then Exit;
+
+  k := 1;
+  while k * step < f.viewMs do
+  begin
+    t := k * step;
+    x := Round(f.w - f.w * t / f.viewMs);
+    if x <= 24 * f.px then Break;
     glColor4f(0.6, 0.6, 0.6, 0.18);
     glBegin(GL_LINES);
     glVertex2f(x, 0); glVertex2f(x, f.h);
     glEnd;
-    t := f.viewMs * (f.w - x) / f.w;
     glColor4f(0.75, 0.75, 0.75, 0.55);
-    FormatTime(t, s);
+    FormatGridTime(t, s);
     DrawTextGL(g, x + 5 * f.px, f.h - 9 * f.px, s);
     if t <= 250 then
     begin
       FormatHz(t, s);
       DrawTextGL(g, x + 5 * f.px, f.h - 9 * f.px - (g^.fontH + 3), s);
     end;
-    Dec(x, gridStep);
+    Inc(k);
   end;
 end;
 
@@ -391,6 +460,7 @@ begin
   seg[ST_RANGE] := 'range ' + s;
   seg[ST_TRIG] := 'trig ' + TrigNamesS[trig];
   seg[ST_SYNC] := 'sync';
+  seg[ST_SPLIT] := 'split';
   { only once the host has processed a block: before that the tempo is
     simply not known yet }
   if syncOn and (not f.vi.sync) and (g^.inst^.syncSeq <> 0) then
@@ -414,9 +484,9 @@ begin
     g^.statusRects[i] := r;
     if i = hot then
       glColor4f(1.0, 0.85, 0.2, 1.0)
-    else if (i = ST_SYNC) and syncOn then
+    else if ((i = ST_SYNC) and syncOn) or ((i = ST_SPLIT) and f.split) then
       glColor4f(1.0, 1.0, 1.0, 1.0)
-    else if (i = ST_SYNC) or ((i = ST_TRIG) and syncOn) then
+    else if (i = ST_SYNC) or (i = ST_SPLIT) or ((i = ST_TRIG) and syncOn) then
       glColor4f(0.6, 0.6, 0.6, 0.7)   { off, or not in effect }
     else
       glColor4f(0.85, 0.85, 0.85, 0.8);
@@ -432,8 +502,8 @@ begin
   end;
 end;
 
-{ crosshair with level and L/R peak readout }
-procedure DrawCrosshair(g: PScopeGui; const f: TFrame);
+{ crosshair with level and peak readout; only: 0 = L, 1 = R, -1 = both }
+procedure DrawCrosshair(g: PScopeGui; const f: TFrame; only: Integer);
 var
   col: Integer;
   peakL, peakR: Single;
@@ -465,8 +535,11 @@ begin
     s2 := 'L ' + s2;
     FormatPeakDb(peakR, s3);
     s3 := 'R ' + s3;
-    if TextWidth(g, s2) + gapW + TextWidth(g, s3) > rowW then
-      rowW := TextWidth(g, s2) + gapW + TextWidth(g, s3);
+    if only = 0 then s3 := '';
+    if only = 1 then s2 := '';
+    bw := TextWidth(g, s2) + TextWidth(g, s3);
+    if only < 0 then bw := bw + gapW;
+    if bw > rowW then rowW := bw;
   end;
 
   bw := rowW + 10 * f.px;
@@ -496,8 +569,9 @@ begin
   begin
     glColor4f(0.5, 1.0, 0.5, 0.95);
     DrawTextGL(g, bx + 5 * f.px, by + bh - 5 * f.px, s2);
+    if only < 0 then bx := bx + TextWidth(g, s2) + gapW;
     glColor4f(1.0, 0.5, 1.0, 0.95);
-    DrawTextGL(g, bx + 5 * f.px + TextWidth(g, s2) + gapW, by + bh - 5 * f.px, s3);
+    DrawTextGL(g, bx + 5 * f.px, by + bh - 5 * f.px, s3);
   end;
 end;
 
@@ -656,22 +730,43 @@ begin
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glLineWidth(f.px);
 
-  f.yCent := f.h * 0.5;
-  f.scopeH := f.h * 0.5 - 4 * f.px;
-  if f.scopeH < 10 then f.scopeH := 10;
   f.vzoom := ClampParam(PARAM_VZOOM_DB, GetParam(g^.inst, PARAM_VZOOM_DB));
   f.viewMs := ClampParam(PARAM_VIEW_MS, GetParam(g^.inst, PARAM_VIEW_MS));
   if f.vi.sync and (g^.inst^.srate > 0) then
     f.viewMs := f.vi.viewSamples * 1000.0 / g^.inst^.srate;
-  f.sc := Exp(-f.vzoom * LN10_OVER_20) * f.scopeH;
+  f.split := GetParam(g^.inst, PARAM_SPLIT) >= 0.5;
+  f.yMid := Round((26 * f.px + f.h) * 0.5);
 
-  DrawGrid(g, f);
+  SetLane(f, 0);
+  DrawLevelGrid(g, f);
+  if f.split then
+  begin
+    glColor4f(0.5, 1.0, 0.5, 0.8);
+    DrawTextGL(g, f.w - 16 * f.px, f.yCent - 6 * f.px, 'L');
+    SetLane(f, 1);
+    DrawLevelGrid(g, f);
+    glColor4f(1.0, 0.5, 1.0, 0.8);
+    DrawTextGL(g, f.w - 16 * f.px, f.yCent - 6 * f.px, 'R');
+    { lane border }
+    glColor4f(0.6, 0.6, 0.6, 0.5);
+    glBegin(GL_LINES);
+    glVertex2f(0, f.yTop + 0.5); glVertex2f(f.w, f.yTop + 0.5);
+    glEnd;
+  end;
+  DrawTimeGrid(g, f);
   if g^.cols.count > 0 then
   begin
+    { each channel stays inside its lane }
+    if f.split then glEnable(GL_SCISSOR_TEST);
+    SetLane(f, 0);
+    glScissor(0, f.h - Round(f.yBot), f.w, Round(f.yBot - f.yTop));
     DrawChannel(g, g^.cols.minL, g^.cols.maxL, g^.cols.count, f,
       0.5, 1.0, 0.5);               { left:  green }
+    SetLane(f, 1);
+    glScissor(0, f.h - Round(f.yBot), f.w, Round(f.yBot - f.yTop));
     DrawChannel(g, g^.cols.minR, g^.cols.maxR, g^.cols.count, f,
       1.0, 0.5, 1.0);               { right: magenta }
+    glDisable(GL_SCISSOR_TEST);
   end;
   if f.vi.sweep and (f.vi.playhead >= 0) then
   begin
@@ -686,7 +781,14 @@ begin
 
   if key.about = 0 then
   begin
-    DrawCrosshair(g, f);
+    if not f.split then
+      DrawCrosshair(g, f, -1)
+    else
+    begin
+      { level against the lane under the cursor }
+      SetLane(f, Ord(f.cursorY >= f.yMid));
+      DrawCrosshair(g, f, Ord(f.cursorY >= f.yMid));
+    end;
     DrawAboutButton(g, f);
   end
   else

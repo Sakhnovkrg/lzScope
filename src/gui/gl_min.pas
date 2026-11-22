@@ -19,6 +19,7 @@ const
   GL_TRIANGLE_STRIP   = $0005;
   GL_QUADS            = $0007;
   GL_BLEND            = $0BE2;
+  GL_SCISSOR_TEST     = $0C11;
   GL_LINE_SMOOTH      = $0B20;
   GL_LINE_SMOOTH_HINT = $0C52;
   GL_NICEST           = $1102;
@@ -73,6 +74,7 @@ procedure glColor4f(r, g, b, a: Single); stdcall; external 'opengl32.dll';
 procedure glLineWidth(width: Single); stdcall; external 'opengl32.dll';
 procedure glEnable(cap: DWORD); stdcall; external 'opengl32.dll';
 procedure glDisable(cap: DWORD); stdcall; external 'opengl32.dll';
+procedure glScissor(x, y, width, height: LongInt); stdcall; external 'opengl32.dll';
 procedure glBlendFunc(sfactor, dfactor: DWORD); stdcall; external 'opengl32.dll';
 procedure glHint(target, mode: DWORD); stdcall; external 'opengl32.dll';
 

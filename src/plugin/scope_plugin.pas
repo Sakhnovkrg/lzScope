@@ -175,7 +175,7 @@ begin
         if iv > SYNC_LEN_COUNT - 1 then iv := SYNC_LEN_COUNT - 1;
         s := ShortString(SyncLenNames[iv]);
       end;
-    PARAM_HOLD, PARAM_SYNC:
+    PARAM_HOLD, PARAM_SYNC, PARAM_SPLIT:
       if value >= 0.5 then s := 'on' else s := 'off';
   else
     Exit;
@@ -210,7 +210,8 @@ begin
         out_value^ := i;
         Exit(True);
       end;
-  if (param_id = PARAM_HOLD) or (param_id = PARAM_SYNC) then
+  if (param_id = PARAM_HOLD) or (param_id = PARAM_SYNC) or
+     (param_id = PARAM_SPLIT) then
   begin
     if (s = 'on') or (s = 'yes') or (s = 'true') then
     begin

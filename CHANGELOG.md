@@ -3,6 +3,7 @@
 ## 1.1.0 — unreleased
 
 - Sync mode: the view is locked to the host bars, from 1/4 bar to 8 bars
+- Split view: left and right channels in separate lanes
 - Red 0 dB lines when the range goes above 0 dB
 - Correct size and look at any UI scale
 - Window can no longer be made narrower than the status line

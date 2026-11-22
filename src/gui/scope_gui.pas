@@ -80,6 +80,14 @@ begin
     ApplyGuiParam(g^.inst, PARAM_SYNC, 1.0);
 end;
 
+procedure ToggleSplit(g: PScopeGui);
+begin
+  if GetParam(g^.inst, PARAM_SPLIT) >= 0.5 then
+    ApplyGuiParam(g^.inst, PARAM_SPLIT, 0.0)
+  else
+    ApplyGuiParam(g^.inst, PARAM_SPLIT, 1.0);
+end;
+
 procedure StepSyncLen(g: PScopeGui; delta: Integer);
 begin
   g^.zoomStart := 0;
@@ -323,7 +331,7 @@ begin
               SetCursor(LoadCursor(0, IDC_SIZENS));
               Exit(1);
             end;
-          ST_TRIG, ST_SYNC:
+          ST_TRIG, ST_SYNC, ST_SPLIT:
             begin
               SetCursor(LoadCursor(0, IDC_HAND));
               Exit(1);
@@ -371,11 +379,12 @@ begin
         item := g^.statusDrag;
         g^.statusDrag := ST_NONE;
         ReleaseCapture;
-        { trig and sync act on a click: released on the same item }
+        { the rest act on a click: released on the same item }
         if StatusItemAt(g, mx, my) = item then
           case item of
             ST_TRIG: CycleTrigger(g^.inst);
             ST_SYNC: ToggleSync(g);
+            ST_SPLIT: ToggleSplit(g);
           end;
         Exit(0);
       end
@@ -714,6 +723,8 @@ begin
   if (g <> nil) and (g^.minW > 0) then
     minW := g^.minW;
   minH := Round(MIN_GUI_H * sc);
+  if GetParam(inst, PARAM_SPLIT) >= 0.5 then
+    minH := Round(MIN_GUI_H_SPLIT * sc);
   if w < minW then w := minW;
   if h < minH then h := minH;
   if w > MAX_GUI_W then w := MAX_GUI_W;

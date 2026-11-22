@@ -25,6 +25,7 @@ var
   GRunning: Boolean = True;
   GUseTransport: Boolean = False;   { feed a playing 120 bpm transport }
   GStartSync: Boolean = False;
+  GStartSplit: Boolean = False;
   GScale: Double = 0;
   GFmt: TFormatSettings;
   GGuiExt: PClapPluginGui = nil;   { interactive mode only }
@@ -317,6 +318,16 @@ begin
   MouseClick(x - 6, sy);
   if ParamNow(PARAM_SYNC) <> 0.0 then Fail('status: second click should turn sync off');
   if ParamNow(PARAM_HOLD) >= 0.5 then Fail('status: clicking sync toggled hold');
+  { split: the item right of sync }
+  while (x < Round(780 * scale)) and (ParamNow(PARAM_SPLIT) = 0.0) do
+  begin
+    MouseClick(x, sy);
+    Inc(x, 6);
+  end;
+  if ParamNow(PARAM_SPLIT) <> 1.0 then Fail('status: split does not respond to clicks');
+  if ParamNow(PARAM_HOLD) >= 0.5 then Fail('status: clicking split toggled hold');
+  SetParamNow(PARAM_SYNC, 0.0);
+  SetParamNow(PARAM_SPLIT, 0.0);
   SetParamNow(PARAM_RETRIG, 0.0);
 
   { len: up = longer }
@@ -458,12 +469,13 @@ end;
 begin
   GInteractive := (ParamCount > 0) and
     ((ParamStr(1) = '-i') or (ParamStr(1) = '--interactive'));
-  { -i extras: --sync starts in sync mode, -s N sets the UI scale }
+  { -i extras: --sync / --split start in that mode, -s N sets the UI scale }
   GFmt := DefaultFormatSettings;
   GFmt.DecimalSeparator := '.';
   for i := 2 to ParamCount do
   begin
     if ParamStr(i) = '--sync' then GStartSync := True;
+    if ParamStr(i) = '--split' then GStartSplit := True;
     if (ParamStr(i) = '-s') and (i < ParamCount) then
       GScale := StrToFloatDef(ParamStr(i + 1), 0, GFmt);
   end;
@@ -650,6 +662,11 @@ begin
   begin
     WriteLn('interactive mode: close the window to exit');
     GUseTransport := True;
+    if GStartSplit then
+    begin
+      SendParam(PARAM_SPLIT, 1.0);
+      ProcessSineBlock;
+    end;
     if GStartSync then
     begin
       SendParam(PARAM_SYNC, 1.0);

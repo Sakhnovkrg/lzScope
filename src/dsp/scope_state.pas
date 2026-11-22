@@ -21,7 +21,8 @@ const
   PARAM_HOLD     = 3;
   PARAM_SYNC_LEN = 4;
   PARAM_SYNC     = 5;   { view locked to the host's bars }
-  PARAM_COUNT    = 6;
+  PARAM_SPLIT    = 6;   { left and right in separate lanes }
+  PARAM_COUNT    = 7;
 
   RETRIG_INSTANT = 0;
   RETRIG_ANY     = 1;
@@ -50,6 +51,7 @@ const
   DEFAULT_GUI_H = 360;
   MIN_GUI_W = 540;   { until the status line has been measured }
   MIN_GUI_H = 120;
+  MIN_GUI_H_SPLIT = 200;
   MAX_GUI_W = 8192;
   MAX_GUI_H = 8192;
 
@@ -79,6 +81,9 @@ const
      minV: 0.0;   maxV: SYNC_LEN_COUNT - 1; defV: SYNC_LEN_DEFAULT;
      flags: CLAP_PARAM_IS_AUTOMATABLE or CLAP_PARAM_IS_STEPPED),
     (id: PARAM_SYNC;     name: 'Sync';
+     minV: 0.0;   maxV: 1.0;    defV: 0.0;
+     flags: CLAP_PARAM_IS_AUTOMATABLE or CLAP_PARAM_IS_STEPPED),
+    (id: PARAM_SPLIT;    name: 'Split';
      minV: 0.0;   maxV: 1.0;    defV: 0.0;
      flags: CLAP_PARAM_IS_AUTOMATABLE or CLAP_PARAM_IS_STEPPED)
   );

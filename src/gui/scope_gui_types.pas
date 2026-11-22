@@ -21,7 +21,8 @@ const
   ST_RANGE = 1;
   ST_TRIG  = 2;
   ST_SYNC  = 3;
-  ST_COUNT = 4;
+  ST_SPLIT = 4;
+  ST_COUNT = 5;
 
 type
   TStatusRect = record
