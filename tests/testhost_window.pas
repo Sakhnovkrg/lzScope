@@ -33,6 +33,8 @@ var
   { the user closed the window; it is gone after this returns }
   OnHostClose: THostClose = nil;
 
+{ for libraries loaded after this }
+procedure HostSetEnv(const name, value: AnsiString);
 function HostWindowOpen(w, h: Integer; const title: AnsiString): Boolean;
 procedure HostWindowFree;
 { for clap_window.handle }

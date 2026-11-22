@@ -31,7 +31,7 @@ function InputCursor(g: PScopeGui; x, y: Integer): TEditorCursor;
 implementation
 
 uses
-  SysUtils, clap_api, scope_state, scope_view, scope_gui_os;
+  SysUtils, clap_api, scope_state, scope_defaults, scope_view, scope_gui_os;
 
 const
   { per wheel notch: ~21% }
@@ -176,12 +176,12 @@ begin
   begin
     g^.zoomStart := 0;
     g^.zoomSpan := 0;
-    ApplyGuiParam(g^.inst, PARAM_SYNC_LEN, ParamDefs[PARAM_SYNC_LEN].defV);
+    ApplyGuiParam(g^.inst, PARAM_SYNC_LEN, UserDefault(PARAM_SYNC_LEN));
   end
   else if dbl and (item = ST_LEN) then
-    ApplyGuiParam(g^.inst, PARAM_VIEW_MS, ParamDefs[PARAM_VIEW_MS].defV)
+    ApplyGuiParam(g^.inst, PARAM_VIEW_MS, UserDefault(PARAM_VIEW_MS))
   else if dbl and (item = ST_RANGE) then
-    ApplyGuiParam(g^.inst, PARAM_VZOOM_DB, ParamDefs[PARAM_VZOOM_DB].defV)
+    ApplyGuiParam(g^.inst, PARAM_VZOOM_DB, UserDefault(PARAM_VZOOM_DB))
   else
   begin
     { len/range: drag; trig: wait for release }
@@ -190,21 +190,11 @@ begin
   end;
 end;
 
-function InAboutButton(g: PScopeGui; x, y: Integer): Boolean;
-var
-  px: Single;
-begin
-  px := g^.scale;
-  if px < 1 then px := 1;
-  Result := (x >= g^.w - Round(26 * px)) and (x <= g^.w - Round(4 * px)) and
-    (y >= Round(4 * px)) and (y <= Round(26 * px));
-end;
-
 { drag while holding scrubs; right = older }
 procedure HandleDrag(g: PScopeGui; x: Integer);
 var
   inst: PScopeInstance;
-  dx, vs: Integer;
+  dx, vs, pw: Integer;
   perPixel, maxOffs: Double;
 begin
   inst := g^.inst;
@@ -212,14 +202,15 @@ begin
     g^.moved := True;
   dx := x - g^.dragLastX;
   g^.dragLastX := x;
-  if (dx = 0) or (g^.w < 1) then
+  pw := PlotWidth(g);
+  if (dx = 0) or (pw < 1) then
     Exit;
   if g^.viewInfo.sweep then
   begin
     { synced cycle: drag moves the zoomed part }
     if (g^.zoomSpan > 0) and (g^.zoomSpan < 1) then
     begin
-      g^.zoomStart := g^.zoomStart - dx / g^.w * g^.zoomSpan;
+      g^.zoomStart := g^.zoomStart - dx / pw * g^.zoomSpan;
       if g^.zoomStart < 0 then g^.zoomStart := 0;
       if g^.zoomStart > 1 - g^.zoomSpan then g^.zoomStart := 1 - g^.zoomSpan;
     end;
@@ -229,22 +220,30 @@ begin
     Exit;
   vs := g^.viewInfo.viewSamples;
   if vs <= 0 then vs := ViewSampleCount(inst);
-  perPixel := vs / g^.w;
-  maxOffs := HoldReach(inst, vs, g^.w);
+  perPixel := vs / pw;
+  maxOffs := HoldReach(inst, vs, pw);
   g^.holdOffs := g^.holdOffs + dx * perPixel;
   if g^.holdOffs < 0 then g^.holdOffs := 0;
   if g^.holdOffs > maxOffs then g^.holdOffs := maxOffs;
 end;
 
-{ click: close about / open about / toggle hold }
+{ click: close about / a header button / toggle hold }
 procedure HandleClick(g: PScopeGui);
+var
+  btn: Integer;
 begin
+  btn := HeaderButtonAt(g, g^.pressX, g^.pressY);
   if g^.aboutOpen then
     g^.aboutOpen := False
-  else if InAboutButton(g, g^.pressX, g^.pressY) then
+  else if btn = BT_HELP then
   begin
     g^.aboutOpen := True;
     g^.aboutT0 := GetTickCount64;
+  end
+  else if btn = BT_SAVE then
+  begin
+    g^.saveOk := SaveDefaults(g^.inst);
+    g^.saveT0 := GetTickCount64;
   end
   else if GetParam(g^.inst, PARAM_HOLD) >= 0.5 then
   begin
@@ -334,10 +333,7 @@ begin
     ApplyVZoom(inst, GetParam(inst, PARAM_VZOOM_DB) - notches * 3.0)
   else if g^.viewInfo.sweep and (g^.w > 0) then
   begin
-    frac := x / g^.w;
-    if frac < 0 then frac := 0;
-    if frac > 1 then frac := 1;
-    ZoomSync(g, notches, frac);
+    ZoomSync(g, notches, PlotFrac(g, x));
   end
   else if SyncOn(g) then
     { no cycle on screen to zoom into; the length is set with len }
@@ -349,15 +345,13 @@ begin
     { holding: zoom around the cursor }
     if (GetParam(inst, PARAM_HOLD) >= 0.5) and (g^.w > 0) then
     begin
-      frac := (g^.w - x) / g^.w;   { 0 = right edge }
-      if frac < 0 then frac := 0;
-      if frac > 1 then frac := 1;
+      frac := 1 - PlotFrac(g, x);   { 0 = right edge }
       oldVs := ClampParam(PARAM_VIEW_MS, GetParam(inst, PARAM_VIEW_MS)) *
         0.001 * inst^.srate;
       newVs := newMs * 0.001 * inst^.srate;
       cursorOffs := g^.holdOffs + frac * oldVs;
       g^.holdOffs := cursorOffs - frac * newVs;
-      maxOffs := HoldReach(inst, Round(newVs), g^.w);
+      maxOffs := HoldReach(inst, Round(newVs), PlotWidth(g));
       if g^.holdOffs < 0 then g^.holdOffs := 0;
       if g^.holdOffs > maxOffs then g^.holdOffs := maxOffs;
     end;
@@ -368,6 +362,8 @@ end;
 
 function InputCursor(g: PScopeGui; x, y: Integer): TEditorCursor;
 begin
+  if HeaderButtonAt(g, x, y) <> BT_NONE then
+    Exit(ecHand);
   case StatusItemAt(g, x, y) of
     ST_LEN, ST_RANGE: Result := ecResizeV;
     ST_TRIG, ST_SYNC, ST_SPLIT: Result := ecHand;

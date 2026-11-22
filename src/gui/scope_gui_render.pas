@@ -25,11 +25,15 @@ const
     ('instant', 'any', 'ascending', 'descending');
   { the longest the status line gets }
   STATUS_WIDEST = 'len 1/2 bar x999.9  range -60.0dB  trig descending  sync (no tempo)  split';
+  BtnNames: array[0..BT_COUNT - 1] of string[12] = ('save default', 'help');
+  HEADER_RIGHT = '    HOLD  save default  help';
 
 type
   TFrame = record
     w, h: Integer;
     px: Single;            { UI scale }
+    { waveform area: right of the dB sidebar, between header and footer }
+    x0, pw, pTop, pBot: Integer;
     split: Boolean;
     yMid: Integer;         { split view: where the lanes meet }
     yTop, yBot: Single;    { lane of the channel being drawn }
@@ -48,6 +52,13 @@ begin
   Str(v: 0: 1, s);
   if v >= 0 then s := '+' + s;
   s := s + 'dB';
+end;
+
+{ sidebar label: whole dB, no unit }
+procedure FormatDbShort(v: Double; out s: ShortString);
+begin
+  Str(Round(v), s);
+  if Round(v) > 0 then s := '+' + s;
 end;
 
 procedure FormatTime(ms: Double; out s: ShortString);
@@ -132,14 +143,28 @@ begin
   if fh <> g^.fontH then
   begin
     BuildAtlas(g, fh);
-    { narrowest window that still fits the status line, HOLD and "?" }
+    { narrowest window that still fits the whole header }
     g^.minW := 0;
     if g^.atlas.tex <> 0 then
-      g^.minW := Round(TextWidth(g, STATUS_WIDEST) + 96 * s);
+      g^.minW := Round(TextWidth(g, STATUS_WIDEST + HEADER_RIGHT) + 16 * s);
   end;
 end;
 
 { draw passes }
+
+{ footer label centered under a line at x; returns its right end }
+function DrawFootLabel(g: PScopeGui; const f: TFrame; x: Single;
+  const s: ShortString): Single;
+var
+  tw, tx: Single;
+begin
+  tw := TextWidth(g, s);
+  tx := x - tw * 0.5;
+  if tx + tw > f.w - 2 then tx := f.w - 2 - tw;
+  if tx < 2 then tx := 2;
+  DrawTextGL(g, tx, f.h - 7 * f.px, s);
+  Result := tx + tw;
+end;
 
 { sync view: lines on bars, beats and finer; labelled bar.beat.sixteenth
   from the cycle start }
@@ -150,6 +175,7 @@ const
 var
   bpb, lenBeats, step, p, beat, first, visBeats, labelEnd: Double;
   i, k, bar, x, q: Integer;
+  tw: Single;
   s, s2: ShortString;
 begin
   bpb := f.vi.beatsPerBar;
@@ -166,7 +192,7 @@ begin
       p := Steps[i]
     else
       p := bpb * (1 shl (i - High(Steps) - 1));   { 1, 2, 4 bars }
-    if f.w * p / visBeats >= 56 * f.px then
+    if f.pw * p / visBeats >= 56 * f.px then
     begin
       step := p;
       Break;
@@ -181,7 +207,7 @@ begin
     p := k * step;
     bar := Trunc(p / bpb + 1e-9);
     beat := p - bar * bpb;
-    x := Round(f.w * (p - first) / visBeats);
+    x := f.x0 + Round(f.pw * (p - first) / visBeats);
     { whole sixteenths get a label, anything finer only a faint line }
     q := Round(beat * 4);
     if Abs(beat * 4 - q) > 1e-6 then q := -1;
@@ -194,7 +220,7 @@ begin
     else
       glColor4f(0.6, 0.6, 0.6, 0.08);
     glBegin(GL_LINES);
-    glVertex2f(x, 0); glVertex2f(x, f.h);
+    glVertex2f(x, f.pTop); glVertex2f(x, f.pBot);
     glEnd;
 
     Str(bar + 1, s);
@@ -209,31 +235,35 @@ begin
       s := s + '.' + s2;
     end;
     { skip a label that would run into the previous one }
-    if (q >= 0) and (x + 5 * f.px >= labelEnd) then
+    tw := TextWidth(g, s);
+    if (q >= 0) and (x - tw * 0.5 >= labelEnd) then
     begin
       glColor4f(0.75, 0.75, 0.75, 0.55);
-      DrawTextGL(g, x + 5 * f.px, f.h - 9 * f.px, s);
-      labelEnd := x + 5 * f.px + TextWidth(g, s) + 8 * f.px;
+      labelEnd := DrawFootLabel(g, f, x, s) + 8 * f.px;
     end;
     Inc(k);
   end;
 end;
 
-{ lane of channel idx: the whole window, or its half in split view }
+{ lane of channel idx: the whole waveform area, or its half in split view }
 procedure SetLane(var f: TFrame; idx: Integer);
 begin
-  f.yTop := 0;
-  f.yBot := f.h;
-  if f.split and (idx = 0) then
-  begin
-    f.yTop := 26 * f.px;   { below the status line }
-    f.yBot := f.yMid;
-  end;
+  f.yTop := f.pTop;
+  f.yBot := f.pBot;
+  if f.split and (idx = 0) then f.yBot := f.yMid;
   if f.split and (idx = 1) then f.yTop := f.yMid;
   f.yCent := (f.yTop + f.yBot) * 0.5;
-  f.scopeH := (f.yBot - f.yTop) * 0.5 - 4 * f.px;
+  { room for the outer labels of both lanes where they meet }
+  f.scopeH := (f.yBot - f.yTop) * 0.5 - (4 + 4 * Ord(f.split)) * f.px;
   if f.scopeH < 10 then f.scopeH := 10;
   f.sc := Exp(-f.vzoom * LN10_OVER_20) * f.scopeH;
+end;
+
+{ sidebar label for a line at y }
+procedure DrawLevelLabel(g: PScopeGui; const f: TFrame; y: Single;
+  const s: ShortString);
+begin
+  DrawTextGL(g, f.x0 - 6 * f.px - TextWidth(g, s), y + g^.fontH * 0.35, s);
 end;
 
 { center line and dB scale of the current lane }
@@ -247,7 +277,7 @@ begin
   { center line }
   glColor4f(0.6, 0.6, 0.6, 1.0);
   glBegin(GL_LINES);
-  glVertex2f(0, f.yCent); glVertex2f(f.w, f.yCent);
+  glVertex2f(f.x0, f.yCent); glVertex2f(f.w, f.yCent);
   glEnd;
 
   { dB grid }
@@ -261,17 +291,17 @@ begin
     begin
       glColor4f(0.6, 0.6, 0.6, 0.25);
       glBegin(GL_LINES);
-      glVertex2f(0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
-      glVertex2f(0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
+      glVertex2f(f.x0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
+      glVertex2f(f.x0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
       glEnd;
-      { outermost line unlabeled; the red 0 dB label wins over a close one }
-      if (iter > 1) and
-         ((f.vzoom <= 0) or (Abs(a - f.sc) > g^.fontH + 6 * f.px)) then
+      { whole dB only; the red 0 dB label wins over a close one }
+      if (Abs(v - Round(v)) < 1e-6) and
+         ((f.vzoom <= 0) or (Abs(a - f.sc) > g^.fontH + 2 * f.px)) then
       begin
-        FormatDb(v, s);
+        FormatDbShort(v, s);
         glColor4f(0.75, 0.75, 0.75, 0.55);
-        DrawTextGL(g, 8 * f.px, f.yCent - a - 5 * f.px, s);
-        DrawTextGL(g, 8 * f.px, f.yCent + a + g^.fontH + 4, s);
+        DrawLevelLabel(g, f, f.yCent - a, s);
+        DrawLevelLabel(g, f, f.yCent + a, s);
       end;
       ly := a - 20 * f.px;
     end;
@@ -284,12 +314,11 @@ begin
     a := f.sc;
     glColor4f(0.85, 0.35, 0.35, 0.5);
     glBegin(GL_LINES);
-    glVertex2f(0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
-    glVertex2f(0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
+    glVertex2f(f.x0, f.yCent - a); glVertex2f(f.w, f.yCent - a);
+    glVertex2f(f.x0, f.yCent + a); glVertex2f(f.w, f.yCent + a);
     glEnd;
-    FormatDb(0, s);
-    DrawTextGL(g, 8 * f.px, f.yCent - a - 5 * f.px, s);
-    DrawTextGL(g, 8 * f.px, f.yCent + a + g^.fontH + 4, s);
+    DrawLevelLabel(g, f, f.yCent - a, '0');
+    DrawLevelLabel(g, f, f.yCent + a, '0');
   end;
 end;
 
@@ -330,7 +359,7 @@ begin
   for i := 0 to 17 do
   begin
     t := Mult[i mod 3] * 0.1 * IntPower(10, i div 3);   { 0.1 ms .. 50 s }
-    if f.w * t / f.viewMs >= 72 * f.px then
+    if f.pw * t / f.viewMs >= 72 * f.px then
     begin
       step := t;
       Break;
@@ -342,20 +371,15 @@ begin
   while k * step < f.viewMs do
   begin
     t := k * step;
-    x := Round(f.w - f.w * t / f.viewMs);
-    if x <= 24 * f.px then Break;
+    x := f.x0 + Round(f.pw - f.pw * t / f.viewMs);
+    if x <= f.x0 + 2 then Break;
     glColor4f(0.6, 0.6, 0.6, 0.18);
     glBegin(GL_LINES);
-    glVertex2f(x, 0); glVertex2f(x, f.h);
+    glVertex2f(x, f.pTop); glVertex2f(x, f.pBot);
     glEnd;
     glColor4f(0.75, 0.75, 0.75, 0.55);
     FormatGridTime(t, s);
-    DrawTextGL(g, x + 5 * f.px, f.h - 9 * f.px, s);
-    if t <= 250 then
-    begin
-      FormatHz(t, s);
-      DrawTextGL(g, x + 5 * f.px, f.h - 9 * f.px - (g^.fontH + 3), s);
-    end;
+    DrawFootLabel(g, f, x, s);
     Inc(k);
   end;
 end;
@@ -384,10 +408,10 @@ begin
   v := @g^.verts[0];
   for x := 0 to cols - 1 do
   begin
-    v^.x := (x + 0.5) * f.colW; v^.y := f.yCent;
+    v^.x := f.x0 + (x + 0.5) * f.colW; v^.y := f.yCent;
     v^.r := r; v^.g := gr; v^.b := b; v^.a := 0.04;
     Inc(v);
-    v^.x := (x + 0.5) * f.colW; v^.y := ToY(maxs[x]);
+    v^.x := f.x0 + (x + 0.5) * f.colW; v^.y := ToY(maxs[x]);
     v^.r := r; v^.g := gr; v^.b := b; v^.a := 0.26;
     Inc(v);
   end;
@@ -492,13 +516,6 @@ begin
     DrawTextGL(g, x, y, seg[i]);
     x := x + w + gap;
   end;
-
-  if GetParam(g^.inst, PARAM_HOLD) >= 0.5 then
-  begin
-    glColor4f(1.0, 0.3, 0.3, 0.9);
-    { same baseline as "?" }
-    DrawTextGL(g, f.w - 68 * f.px, 4 * f.px + (22 * f.px + g^.fontH) * 0.5, 'HOLD');
-  end;
 end;
 
 { crosshair with level and peak readout; only: 0 = L, 1 = R, -1 = both }
@@ -507,24 +524,39 @@ var
   col: Integer;
   peakL, peakR: Single;
   havePeaks: Boolean;
+  t: Double;
   bx, by, bw, bh, rowW, gapW: Single;
   s, s2, s3: ShortString;
 begin
-  if f.cursorX < 0 then Exit;
+  { only over the waveform }
+  if (f.cursorX < f.x0) or (f.cursorY < f.pTop) or (f.cursorY >= f.pBot) then
+    Exit;
 
   glColor4f(1.0, 1.0, 1.0, 0.30);
   glBegin(GL_LINES);
-  glVertex2f(f.cursorX + 0.5, 0); glVertex2f(f.cursorX + 0.5, f.h);
-  glVertex2f(0, f.cursorY + 0.5); glVertex2f(f.w, f.cursorY + 0.5);
+  glVertex2f(f.cursorX + 0.5, f.pTop); glVertex2f(f.cursorX + 0.5, f.pBot);
+  glVertex2f(f.x0, f.cursorY + 0.5); glVertex2f(f.w, f.cursorY + 0.5);
   glEnd;
 
   FormatPeakDb(Abs(f.yCent - f.cursorY) / f.sc, s);
+  if not f.vi.sweep then
+  begin
+    { time back from the right edge, and the frequency with that period }
+    t := f.viewMs * (f.w - f.cursorX) / f.pw;
+    FormatTime(t, s2);
+    s := s + '  ' + s2;
+    if t <= 250 then
+    begin
+      FormatHz(t, s2);
+      s := s + '  ' + s2;
+    end;
+  end;
   rowW := TextWidth(g, s);
   gapW := TextWidth(g, '  ');
   havePeaks := g^.cols.count > 0;
   if havePeaks then
   begin
-    col := (f.cursorX * g^.cols.count) div f.w;
+    col := ((f.cursorX - f.x0) * g^.cols.count) div f.pw;
     if col > g^.cols.count - 1 then col := g^.cols.count - 1;
     peakL := Abs(g^.cols.minL[col]);
     if Abs(g^.cols.maxL[col]) > peakL then peakL := Abs(g^.cols.maxL[col]);
@@ -574,16 +606,60 @@ begin
   end;
 end;
 
-procedure DrawAboutButton(g: PScopeGui; const f: TFrame);
+{ right side of the header: HOLD, then the buttons }
+procedure DrawHeaderButtons(g: PScopeGui; const f: TFrame);
+var
+  i, hot: Integer;
+  x, y, gap, w: Single;
+  s: ShortString;
+  r: TStatusRect;
+  flash: Boolean;
 begin
-  glColor4f(0.6, 0.6, 0.7, 0.5);
-  glBegin(GL_LINE_STRIP);
-  glVertex2f(f.w - 26 * f.px, 4 * f.px); glVertex2f(f.w - 4 * f.px, 4 * f.px);
-  glVertex2f(f.w - 4 * f.px, 26 * f.px); glVertex2f(f.w - 26 * f.px, 26 * f.px);
-  glVertex2f(f.w - 26 * f.px, 4 * f.px);
-  glEnd;
-  glColor4f(0.8, 0.8, 0.9, 0.8);
-  DrawTextGL(g, f.w - 18 * f.px, 4 * f.px + (22 * f.px + g^.fontH) * 0.5, '?');
+  hot := BT_NONE;
+  if f.cursorX >= 0 then
+    hot := HeaderButtonAt(g, f.cursorX, f.cursorY);
+  flash := (g^.saveT0 <> 0) and (GetTickCount64 - g^.saveT0 < SAVE_FLASH_MS);
+
+  x := f.w - Round(8 * f.px);
+  y := 6 * f.px + g^.fontH;
+  gap := TextWidth(g, '  ');
+  for i := BT_COUNT - 1 downto 0 do
+  begin
+    w := TextWidth(g, BtnNames[i]);
+    x := x - w;
+    r.x0 := Round(x - gap * 0.5);
+    r.x1 := Round(x + w + gap * 0.5);
+    r.y0 := 0;
+    r.y1 := Round(y + 6 * f.px);
+    g^.btnRects[i] := r;
+    s := BtnNames[i];
+    if i = hot then
+      glColor4f(1.0, 0.85, 0.2, 1.0)
+    else
+      glColor4f(0.85, 0.85, 0.85, 0.8);
+    if (i = BT_SAVE) and flash then
+    begin
+      { the result takes the button's place for a moment }
+      if g^.saveOk then
+      begin
+        s := 'saved';
+        glColor4f(0.5, 1.0, 0.5, 1.0);
+      end
+      else
+      begin
+        s := 'failed';
+        glColor4f(1.0, 0.3, 0.3, 1.0);
+      end;
+    end;
+    DrawTextGL(g, x + w - TextWidth(g, s), y, s);
+    x := x - gap;
+  end;
+
+  if GetParam(g^.inst, PARAM_HOLD) >= 0.5 then
+  begin
+    glColor4f(1.0, 0.3, 0.3, 0.9);
+    DrawTextGL(g, x - TextWidth(g, 'HOLD'), y, 'HOLD');
+  end;
 end;
 
 procedure DrawAbout(g: PScopeGui; const f: TFrame);
@@ -692,10 +768,22 @@ begin
     g^.view.zoomStart := 0;
     g^.view.zoomSpan := 1;
   end;
+  { header, sidebar and footer keep the text off the waveform }
+  f.x0 := Round(TextWidth(g, '-60') + 12 * f.px);
+  f.pw := f.w - f.x0;
+  if f.pw < 2 then f.pw := 2;
+  f.pTop := Round(30 * f.px);
+  f.pBot := f.h - Round(g^.fontH + 10 * f.px);
+  if f.pBot < f.pTop + 20 then f.pBot := f.pTop + 20;
+  g^.plot.x0 := f.x0;
+  g^.plot.x1 := f.x0 + f.pw;
+  g^.plot.y0 := f.pTop;
+  g^.plot.y1 := f.pBot;
+
   { one column per 96-dpi pixel: the trace looks the same at any UI scale }
-  nCols := Round(f.w / f.px);
+  nCols := Round(f.pw / f.px);
   if nCols < 2 then nCols := 2;
-  f.colW := f.w / nCols;
+  f.colW := f.pw / nCols;
   BuildColumns(g^.inst, key.holdOffs, nCols, g^.cols, g^.view, f.vi);
   g^.lastAnchorOffs := f.vi.anchorOffs;
   g^.viewInfo := f.vi;
@@ -719,49 +807,53 @@ begin
   if f.vi.sync and (g^.inst^.srate > 0) then
     f.viewMs := f.vi.viewSamples * 1000.0 / g^.inst^.srate;
   f.split := GetParam(g^.inst, PARAM_SPLIT) >= 0.5;
-  f.yMid := Round((26 * f.px + f.h) * 0.5);
+  f.yMid := (f.pTop + f.pBot) div 2;
 
   SetLane(f, 0);
   DrawLevelGrid(g, f);
   if f.split then
   begin
-    glColor4f(0.5, 1.0, 0.5, 0.8);
-    DrawTextGL(g, f.w - 16 * f.px, f.yCent - 6 * f.px, 'L');
     SetLane(f, 1);
     DrawLevelGrid(g, f);
-    glColor4f(1.0, 0.5, 1.0, 0.8);
-    DrawTextGL(g, f.w - 16 * f.px, f.yCent - 6 * f.px, 'R');
     { lane border }
     glColor4f(0.6, 0.6, 0.6, 0.5);
     glBegin(GL_LINES);
-    glVertex2f(0, f.yTop + 0.5); glVertex2f(f.w, f.yTop + 0.5);
+    glVertex2f(f.x0, f.yTop + 0.5); glVertex2f(f.w, f.yTop + 0.5);
     glEnd;
   end;
   DrawTimeGrid(g, f);
   if g^.cols.count > 0 then
   begin
     { each channel stays inside its lane }
-    if f.split then glEnable(GL_SCISSOR_TEST);
+    glEnable(GL_SCISSOR_TEST);
     SetLane(f, 0);
-    glScissor(0, f.h - Round(f.yBot), f.w, Round(f.yBot - f.yTop));
+    glScissor(f.x0, f.h - Round(f.yBot), f.pw, Round(f.yBot - f.yTop));
     DrawChannel(g, g^.cols.minL, g^.cols.maxL, g^.cols.count, f,
       0.5, 1.0, 0.5);               { left:  green }
     SetLane(f, 1);
-    glScissor(0, f.h - Round(f.yBot), f.w, Round(f.yBot - f.yTop));
+    glScissor(f.x0, f.h - Round(f.yBot), f.pw, Round(f.yBot - f.yTop));
     DrawChannel(g, g^.cols.minR, g^.cols.maxR, g^.cols.count, f,
       1.0, 0.5, 1.0);               { right: magenta }
     glDisable(GL_SCISSOR_TEST);
   end;
+  if f.split then
+  begin
+    { lane names, top right of each lane }
+    glColor4f(1.0, 1.0, 1.0, 0.75);
+    DrawTextGL(g, f.w - 16 * f.px, f.pTop + 8 * f.px + g^.fontH, 'L');
+    DrawTextGL(g, f.w - 16 * f.px, f.yMid + 8 * f.px + g^.fontH, 'R');
+  end;
   if f.vi.sweep and (f.vi.playhead >= 0) then
   begin
     { playhead }
-    x := Round(f.vi.playhead * f.w) + 0.5;
+    x := f.x0 + Round(f.vi.playhead * f.pw) + 0.5;
     glColor4f(1.0, 1.0, 1.0, 0.45);
     glBegin(GL_LINES);
-    glVertex2f(x, 0); glVertex2f(x, f.h);
+    glVertex2f(x, f.pTop); glVertex2f(x, f.pBot);
     glEnd;
   end;
   DrawStatus(g, f);
+  DrawHeaderButtons(g, f);
 
   if key.about = 0 then
   begin
@@ -773,7 +865,6 @@ begin
       SetLane(f, Ord(f.cursorY >= f.yMid));
       DrawCrosshair(g, f, Ord(f.cursorY >= f.yMid));
     end;
-    DrawAboutButton(g, f);
   end
   else
     DrawAbout(g, f);
@@ -795,6 +886,8 @@ begin
   key.h := g^.h;
   key.fontH := g^.fontH;
   key.about := Ord(g^.aboutOpen);
+  key.saveFlash := Ord((g^.saveT0 <> 0) and
+    (GetTickCount64 - g^.saveT0 < SAVE_FLASH_MS));
   key.statusDrag := g^.statusDrag;
   key.syncSeq := g^.inst^.syncSeq;
   key.zoomStart := g^.zoomStart;

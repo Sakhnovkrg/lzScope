@@ -41,6 +41,8 @@ const
   SyncLenBars: array[0..SYNC_LEN_COUNT - 1] of Double =
     (0.25, 0.5, 1.0, 2.0, 4.0, 8.0);
 
+  SYNC_JUMP_BARS = 0.001;   { the song position may be off by this much }
+
   HIST_SECONDS = 20;   { 8 bars down to 98 bpm, 4 bars down to 49 }
 
   MIN_SAMPLE_RATE = 1000.0;
@@ -50,8 +52,8 @@ const
   DEFAULT_GUI_W = 800;
   DEFAULT_GUI_H = 360;
   MIN_GUI_W = 540;   { until the status line has been measured }
-  MIN_GUI_H = 120;
-  MIN_GUI_H_SPLIT = 200;
+  MIN_GUI_H = 160;
+  MIN_GUI_H_SPLIT = 240;
   MAX_GUI_W = 8192;
   MAX_GUI_H = 8192;
 
@@ -97,6 +99,11 @@ type
     bars: Double;        { song position at that frame, in bars }
     samplesPerBar: Double;
     beatsPerBar: Double;
+    { the last time the position jumped (seek, loop): what was recorded
+      before it sits jumpBars away from where the bars now say }
+    jumpFrame: Int64;
+    jumpBars: Double;
+    prevJumpFrame: Int64;   { the jump before that; older frames are unusable }
   end;
 
   PScopeInstance = ^TScopeInstance;

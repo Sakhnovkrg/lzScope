@@ -215,16 +215,23 @@ end;
 
 { Transport running: the view is one cycle. Columns left of the playhead
   come from the current cycle, the rest from the previous one, so a
-  looped part stands still. }
+  looped part stands still. After a seek, or a loop that is not a whole
+  number of cycles, the older audio belongs elsewhere and is left out. }
 function ScanSweep(const r: TScopeRing; const si: TSyncInfo; written,
   validFrom: Int64; lenBars, lenSamples: Double; colCount: Integer;
   var cols: TColumns; var state: TViewState; var info: TViewInfo): Int64;
 var
-  phase, start, span, zs: Double;
+  phase, start, span, zs, d: Double;
   s0, cp, lenInt, o0, o1, winStart, winLen: Int64;
   x: Integer;
 begin
   lenInt := Round(lenSamples);
+
+  if si.prevJumpFrame > validFrom then validFrom := si.prevJumpFrame;
+  d := si.jumpBars / lenBars;
+  if (Abs(d - Round(d)) * lenBars > SYNC_JUMP_BARS) and
+     (si.jumpFrame > validFrom) then
+    validFrom := si.jumpFrame;
 
   { zoom window inside the cycle }
   span := state.zoomSpan;

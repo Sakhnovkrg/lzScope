@@ -24,6 +24,14 @@ const
   ST_SPLIT = 4;
   ST_COUNT = 5;
 
+  { header buttons, on the right }
+  BT_NONE  = -1;
+  BT_SAVE  = 0;   { save the settings as the default }
+  BT_HELP  = 1;
+  BT_COUNT = 2;
+
+  SAVE_FLASH_MS = 1200;   { how long "saved" stays up }
+
 type
   TStatusRect = record
     x0, y0, x1, y1: Integer;   { client px }
@@ -56,6 +64,7 @@ type
     cursorX, cursorY: Integer;   { -1 = outside }
     about: LongInt;
     statusDrag: LongInt;
+    saveFlash: LongInt;
     syncSeq: LongInt;
     zoomStart, zoomSpan: Double;
   end;
@@ -81,6 +90,10 @@ type
     pressX, pressY: Integer;
     dragLastX: Integer;
     statusRects: array[0..ST_COUNT - 1] of TStatusRect;
+    btnRects: array[0..BT_COUNT - 1] of TStatusRect;
+    saveT0: QWord;           { when the defaults were last saved, 0 = never }
+    saveOk: Boolean;
+    plot: TStatusRect;       { waveform area of the last frame }
     statusDrag: LongInt;     { pressed item or ST_NONE }
     statusLastY: Integer;
     statusAccum: Double;     { host units dragged towards the next sync length }
@@ -108,6 +121,11 @@ type
 function EffectiveScale(inst: PScopeInstance; g: PScopeGui): Single;
 { ST_NONE if none }
 function StatusItemAt(g: PScopeGui; x, y: Integer): Integer;
+{ BT_NONE if none }
+function HeaderButtonAt(g: PScopeGui; x, y: Integer): Integer;
+{ waveform area: its width in px, and x as 0 (left edge) .. 1 (right) }
+function PlotWidth(g: PScopeGui): Integer;
+function PlotFrac(g: PScopeGui; x: Integer): Double;
 
 implementation
 
@@ -124,6 +142,35 @@ begin
     if (x >= g^.statusRects[i].x0) and (x < g^.statusRects[i].x1) and
        (y >= g^.statusRects[i].y0) and (y < g^.statusRects[i].y1) then
       Exit(i);
+end;
+
+function HeaderButtonAt(g: PScopeGui; x, y: Integer): Integer;
+var
+  i: Integer;
+begin
+  Result := BT_NONE;
+  if g^.aboutOpen then Exit;
+  for i := 0 to BT_COUNT - 1 do
+    if (x >= g^.btnRects[i].x0) and (x < g^.btnRects[i].x1) and
+       (y >= g^.btnRects[i].y0) and (y < g^.btnRects[i].y1) then
+      Exit(i);
+end;
+
+function PlotWidth(g: PScopeGui): Integer;
+begin
+  Result := g^.plot.x1 - g^.plot.x0;
+  if Result < 1 then Result := g^.w;   { nothing drawn yet }
+end;
+
+function PlotFrac(g: PScopeGui; x: Integer): Double;
+var
+  w: Integer;
+begin
+  w := PlotWidth(g);
+  if w < 1 then Exit(0);
+  Result := (x - g^.plot.x0) / w;
+  if Result < 0 then Result := 0;
+  if Result > 1 then Result := 1;
 end;
 
 function EffectiveScale(inst: PScopeInstance; g: PScopeGui): Single;

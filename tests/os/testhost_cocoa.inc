@@ -85,6 +85,13 @@ begin
   h := Round(sz.height);
 end;
 
+function setenv(name, value: PAnsiChar; overwrite: LongInt): LongInt; cdecl; external 'c';
+
+procedure HostSetEnv(const name, value: AnsiString);
+begin
+  setenv(PAnsiChar(name), PAnsiChar(value), 1);
+end;
+
 procedure HostWindowFocus;
 begin
   Window.makeKeyAndOrderFront(nil);

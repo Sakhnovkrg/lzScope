@@ -58,9 +58,10 @@ procedure PublishTransport(inst: PScopeInstance; t: PClapEventTransport;
 const
   NEED = CLAP_TRANSPORT_HAS_TEMPO or CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
 var
-  s: TSyncInfo;
-  beats: Double;
+  s, prev: TSyncInfo;
+  beats, d: Double;
 begin
+  prev := inst^.sync;
   FillChar(s, SizeOf(s), 0);
   if (t <> nil) and ((t^.flags and NEED) = NEED) and
      (not IsNaNValue(t^.tempo)) and (t^.tempo >= 1.0) and (t^.tempo <= 10000.0) then
@@ -79,6 +80,27 @@ begin
         (beats - t^.bar_start / CLAP_BEATTIME_FACTOR) / s.beatsPerBar;
     end;
     s.samplesPerBar := inst^.srate * 60.0 / t^.tempo * s.beatsPerBar;
+
+    s.jumpFrame := prev.jumpFrame;
+    s.jumpBars := prev.jumpBars;
+    s.prevJumpFrame := prev.prevJumpFrame;
+    if s.playing and not (prev.valid and prev.playing) then
+    begin
+      { playback starts: nothing recorded so far is on these bars }
+      s.jumpFrame := frame;
+      s.jumpBars := 0;
+      s.prevJumpFrame := frame;
+    end
+    else if s.playing then
+    begin
+      d := s.bars - (prev.bars + (frame - prev.frame) / prev.samplesPerBar);
+      if Abs(d) > SYNC_JUMP_BARS then
+      begin
+        s.prevJumpFrame := prev.jumpFrame;
+        s.jumpFrame := frame;
+        s.jumpBars := d;
+      end;
+    end;
   end;
   PublishSync(inst, s);
 end;

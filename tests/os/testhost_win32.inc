@@ -44,6 +44,12 @@ begin
   Result := DefWindowProcW(hw, msg, wp, lp);
 end;
 
+procedure HostSetEnv(const name, value: AnsiString);
+begin
+  SetEnvironmentVariableW(PWideChar(UnicodeString(name)),
+    PWideChar(UnicodeString(value)));
+end;
+
 function HostWindowOpen(w, h: Integer; const title: AnsiString): Boolean;
 var
   wc: WNDCLASSW;

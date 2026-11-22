@@ -85,6 +85,10 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
+        <Filename Value="src\dsp\scope_defaults.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
         <Filename Value="src\dsp\scope_ring.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>

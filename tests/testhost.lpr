@@ -28,6 +28,7 @@ var
   GInteractive: Boolean = False;
   GRunning: Boolean = True;
   GUseTransport: Boolean = False;   { feed a playing 120 bpm transport }
+  GDefaultsPath: AnsiString;        { where the plugin under test keeps its defaults }
   GStartSync: Boolean = False;
   GStartSplit: Boolean = False;
   GScale: Double = 0;
@@ -171,7 +172,7 @@ var
   proc: TClapProcess;
   i: Integer;
   status: Int32;
-  v: Double;
+  v, v2: Double;
   phase: Double = 0;
   phase2: Double = 0;
   lfoPhase: Double = 0;
@@ -459,6 +460,11 @@ begin
     libPath := ExtractFilePath(ParamStr(0)) + '..' + PathDelim + PLUGIN_LIB;
   if not FileExists(libPath) then Fail(PLUGIN_LIB + ' not found near ' + ParamStr(0));
 
+  { the user's own defaults stay out of the tests }
+  GDefaultsPath := GetTempDir + 'lzscope-test-defaults.bin';
+  DeleteFile(GDefaultsPath);
+  HostSetEnv('LZSCOPE_DEFAULTS', GDefaultsPath);
+
   lib := LoadLibrary(libPath);
   if lib = NilHandle then Fail('LoadLibrary: ' + libPath);
 
@@ -683,6 +689,21 @@ begin
     if v < 0.5 then Fail('plain click should toggle hold on');
     MouseClick(400, 200);
     WriteLn('about overlay + click routing: ok');
+
+    { save default: writes the file, does not toggle hold }
+    MouseClick(710, 15);
+    if not FileExists(GDefaultsPath) then Fail('save default: no file written');
+    { a double click on len now resets to the saved value }
+    if not paramsExt^.get_value(plug, PARAM_VIEW_MS, @v) then Fail('get view size');
+    EditorWheel(0, 0, 3);
+    MouseDoubleClick(40, 15);
+    if not paramsExt^.get_value(plug, PARAM_VIEW_MS, @v2) then Fail('get view size 2');
+    if Abs(v2 - v) > 1e-9 then
+      Fail(Format('double click should reset len to the saved %.3f, got %.3f', [v, v2]));
+    DeleteFile(GDefaultsPath);
+    if not paramsExt^.get_value(plug, PARAM_HOLD, @v) then Fail('get hold 3');
+    if v >= 0.5 then Fail('save default toggled hold');
+    WriteLn('save default: ok');
 
     { let the render thread run }
     t0 := GetTickCount64;

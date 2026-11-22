@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- "save default": new instances start with the current settings
+- Header, dB scale and time labels no longer overlap the waveform
+- Crosshair shows time and frequency instead of the grid
+- Sync mode: no old audio on the wrong bars after a seek or in a short loop
+
 ## 1.1.0 — 2026-11-22
 
 - macOS version

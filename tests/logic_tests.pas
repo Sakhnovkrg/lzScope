@@ -14,7 +14,7 @@ procedure RunStressTest;
 implementation
 
 uses
-  SysUtils, clap_api, scope_ring, scope_state, scope_dsp, scope_view;
+  SysUtils, clap_api, scope_ring, scope_state, scope_defaults, scope_dsp, scope_view;
 
 const
   SRATE = 1000.0;   { ~10 000 frames of history }
@@ -686,6 +686,7 @@ var
   st: TViewState;
   vi: TViewInfo;
   x: Integer;
+  lenS: Int64;
 begin
   TestSyncCase(2, 133.0, 4.0);   { 1 bar }
   TestSyncCase(0, 133.0, 4.0);   { 1/4 bar }
@@ -738,6 +739,39 @@ begin
   Check(vi.viewSamples = ViewSampleCount(@Inst), 'sync: fallback view length');
   FreeInstance;
 
+  { a jump by whole cycles keeps the previous pass on screen }
+  NewInstance(SRATE);
+  InitViewState(st);
+  SyncTempo := 120.0;
+  SyncFrame := 0;
+  lenS := Round(SRATE * 2.0);   { 1 bar }
+  SetParam(@Inst, PARAM_SYNC, 1.0);
+  SetParam(@Inst, PARAM_SYNC_LEN, 2);
+  FeedSync(3 * lenS + lenS div 10, True, True);
+  Dec(SyncFrame, 2 * lenS);
+  FeedSync(3 * lenS div 20, True, True);
+  BuildColumns(@Inst, 0, 200, ColsA, st, vi);
+  Check(vi.sweep and (Abs(vi.playhead - 0.25) < 0.01), 'sync loop: playhead');
+  for x := 0 to 199 do
+    if Abs(ColsA.maxL[x] - (x + 0.5) / 200) > 0.02 then
+      Fail(Format('sync loop: column %d lost after a whole-cycle jump', [x]));
+
+  { any other jump: only what played since then is shown }
+  Dec(SyncFrame, lenS div 2);   { now at 0.75 }
+  FeedSync(lenS div 10, True, True);
+  BuildColumns(@Inst, 0, 200, ColsA, st, vi);
+  Check(vi.sweep and (Abs(vi.playhead - 0.85) < 0.01), 'sync seek: playhead');
+  for x := 0 to 199 do
+    if ((x + 0.5) / 200 < 0.74) or ((x + 0.5) / 200 > 0.86) then
+    begin
+      if (ColsA.minL[x] <> 0) or (ColsA.maxL[x] <> 0) then
+        Fail(Format('sync seek: column %d shows audio from before the jump', [x]));
+    end
+    else if ((x + 0.5) / 200 > 0.76) and ((x + 0.5) / 200 < 0.84) then
+      if Abs(ColsA.maxL[x] - (x + 0.5) / 200) > 0.02 then
+        Fail(Format('sync seek: column %d missing after the jump', [x]));
+  FreeInstance;
+
   { 8 bars at 30 bpm do not fit the ring: the longest that fits is used }
   NewInstance(SRATE);
   SyncTempo := 30.0;
@@ -749,6 +783,48 @@ begin
   Check(vi.sync and (vi.syncLen = 3) and (ColsA.count = 200), 'sync: long cycle not shortened');
   FreeInstance;
   WriteLn('logic: bar sync ok');
+end;
+
+procedure TestDefaults;
+var
+  path: UnicodeString;
+  h: THandle;
+  junk: array[0..15] of Byte;
+begin
+  path := UnicodeString(GetTempDir + 'lzscope-logic-defaults.bin');
+  DeleteFile(path);
+  ResetParams(@Inst);
+  if LoadDefaultsFrom(@Inst, path) then Fail('defaults: loaded a missing file');
+
+  SetParam(@Inst, PARAM_VIEW_MS, 123.0);
+  SetParam(@Inst, PARAM_RETRIG, RETRIG_DESC);
+  SetParam(@Inst, PARAM_SPLIT, 1.0);
+  SetParam(@Inst, PARAM_HOLD, 1.0);
+  if not SaveDefaultsTo(@Inst, path) then Fail('defaults: save failed');
+  ResetParams(@Inst);
+  if not LoadDefaultsFrom(@Inst, path) then Fail('defaults: load failed');
+  if (GetParam(@Inst, PARAM_VIEW_MS) <> 123.0) or
+     (GetParam(@Inst, PARAM_RETRIG) <> RETRIG_DESC) or
+     (GetParam(@Inst, PARAM_SPLIT) <> 1.0) then
+    Fail('defaults: values did not survive');
+  if GetParam(@Inst, PARAM_HOLD) <> 0.0 then Fail('defaults: hold must load off');
+  if UserDefaultFrom(path, PARAM_VIEW_MS) <> 123.0 then
+    Fail('defaults: reset value should be the saved one');
+
+  { a damaged file changes nothing }
+  FillChar(junk, SizeOf(junk), $5A);
+  h := FileCreate(path);
+  FileWrite(h, junk, SizeOf(junk));
+  FileClose(h);
+  ResetParams(@Inst);
+  if LoadDefaultsFrom(@Inst, path) then Fail('defaults: loaded a damaged file');
+  if GetParam(@Inst, PARAM_VIEW_MS) <> ParamDefs[PARAM_VIEW_MS].defV then
+    Fail('defaults: damaged file changed a param');
+  if UserDefaultFrom(path, PARAM_VIEW_MS) <> ParamDefs[PARAM_VIEW_MS].defV then
+    Fail('defaults: reset value without a usable file should be the factory one');
+  DeleteFile(path);
+  ResetParams(@Inst);
+  WriteLn('logic: defaults ok');
 end;
 
 procedure RunLogicTests;
@@ -763,6 +839,7 @@ begin
   TestProcessChannels;
   TestTransportReleasesHold;
   TestSync;
+  TestDefaults;
 end;
 
 { threading stress test }

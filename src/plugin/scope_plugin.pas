@@ -27,7 +27,7 @@ var
 implementation
 
 uses
-  SysUtils, scope_state, scope_dsp, scope_gui, scope_gui_os;
+  SysUtils, scope_state, scope_defaults, scope_dsp, scope_gui, scope_gui_os;
 
 const
   STATE_MAGIC_V0 = $4C5A5030; { 'LZP0': PARAM_COUNT_V0 doubles }
@@ -585,6 +585,7 @@ begin
   inst^.srate := 48000.0;
   inst^.guiScale := 0.0;   { 0 = use OS DPI }
   ResetParams(inst);
+  LoadDefaults(inst);
 
   inst^.plug.desc := @ScopeDescriptor;
   inst^.plug.plugin_data := inst;
