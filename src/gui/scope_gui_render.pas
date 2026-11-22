@@ -12,12 +12,11 @@ function RenderThreadProc(param: Pointer): PtrInt;
 implementation
 
 uses
-  Windows, Math, gl_min, scope_ring, scope_state, scope_view, scope_shader,
-  scope_gui_types, scope_gui_text;
+  SysUtils, Math, gl_min, scope_ring, scope_state, scope_view, scope_shader,
+  scope_gui_types, scope_gui_text, scope_gui_os;
 
 const
   LN10_OVER_20 = 0.11512925464970229;
-  FALLBACK_FRAME_MS = 12;  { no DWM, no vsync }
   IDLE_POLL_MS = 8;        { nothing changed }
   HIDDEN_POLL_MS = 30;     { hidden or minimized }
   MAX_IDLE_MS = 500;       { forced redraw interval }
@@ -126,7 +125,7 @@ var
   s: Single;
   fh: Integer;
 begin
-  s := EffectiveScale(g^.inst, g^.wnd);
+  s := EffectiveScale(g^.inst, g);
   g^.scale := s;
   fh := Round(12 * s);
   if fh < 9 then fh := 9;
@@ -588,15 +587,6 @@ begin
 end;
 
 procedure DrawAbout(g: PScopeGui; const f: TFrame);
-const
-  Shortcuts: array[5..ABOUT_LINES - 1] of string[40] = (
-    'wheel ............. time zoom',
-    'ctrl+wheel ........... v-zoom',
-    'click .................. hold',
-    'drag while hold ....... scrub',
-    'right-click .... trigger mode',
-    'drag len/range ....... adjust',
-    'double-click .......... reset');
 var
   aboutT: Double;
   ty, easeK: Single;
@@ -651,37 +641,31 @@ begin
 
   BuildAboutTextures(g);
 
-  s := 'lzScope v' + PLUGIN_VERSION;
+  { credits, centered }
   ty := f.h * 0.5 - 3.0 * g^.fontH + Sin(aboutT * 2.0) * 3 * f.px;
-  glColor4f(1.0, 1.0, 1.0, 0.95);
-  DrawAboutLine(g, 0, s, (f.w - AboutLineW(g, 0, s)) * 0.5, ty);
-
-  s := 'created by ' + PLUGIN_AUTHOR;
-  ty := ty + 2.0 * g^.fontH;
-  glColor4f(0.8, 0.8, 0.8, 0.9);
-  DrawAboutLine(g, 1, s, (f.w - AboutLineW(g, 1, s)) * 0.5, ty);
-
-  s := PLUGIN_URL;
-  ty := ty + 2.0 * g^.fontH;
-  glColor4f(0.5, 1.0, 0.5, 0.9);
-  DrawAboutLine(g, 2, s, (f.w - AboutLineW(g, 2, s)) * 0.5, ty);
-
-  s := 'built with Free Pascal & Lazarus';
-  ty := ty + 2.0 * g^.fontH;
-  glColor4f(0.8, 0.8, 0.8, 0.9);
-  DrawAboutLine(g, 3, s, (f.w - AboutLineW(g, 3, s)) * 0.5, ty);
-
-  s := 'inspired by the Cockos JSFX Oscilloscope Meter';
-  ty := ty + 1.6 * g^.fontH;
-  glColor4f(0.62, 0.62, 0.68, 0.85);
-  DrawAboutLine(g, 4, s, (f.w - AboutLineW(g, 4, s)) * 0.5, ty);
+  for i := 0 to ABOUT_CREDITS - 1 do
+  begin
+    case i of
+      0: glColor4f(1.0, 1.0, 1.0, 0.95);
+      2: glColor4f(0.5, 1.0, 0.5, 0.9);
+      4: glColor4f(0.62, 0.62, 0.68, 0.85);
+    else
+      glColor4f(0.8, 0.8, 0.8, 0.9);
+    end;
+    s := AboutText(i);
+    DrawAboutLine(g, i, s, (f.w - AboutLineW(g, i, s)) * 0.5, ty);
+    if i < 3 then
+      ty := ty + 2.0 * g^.fontH
+    else
+      ty := ty + 1.6 * g^.fontH;
+  end;
 
   { shortcuts, top-right }
   glColor4f(0.62, 0.62, 0.68, 0.85);
   ty := 20 * f.px + g^.fontH;
-  for i := Low(Shortcuts) to High(Shortcuts) do
+  for i := ABOUT_CREDITS to ABOUT_LINES - 1 do
   begin
-    s := Shortcuts[i];
+    s := AboutText(i);
     DrawAboutLine(g, i, s, f.w - AboutLineW(g, i, s) - 16 * f.px, ty);
     ty := ty + 1.6 * g^.fontH;
   end;
@@ -793,16 +777,13 @@ begin
   end
   else
     DrawAbout(g, f);
-
-  SwapBuffers(g^.dc);
 end;
 
 { thread }
 
 procedure MakeFrameKey(g: PScopeGui; out key: TFrameKey);
 var
-  cp: TPoint;
-  i: Integer;
+  cx, cy, i: Integer;
 begin
   FillChar(key, SizeOf(key), 0);   { keys are compared bytewise }
   key.written := RingWritten(g^.inst^.ring);
@@ -820,38 +801,18 @@ begin
   key.zoomSpan := g^.zoomSpan;
   key.cursorX := -1;
   key.cursorY := -1;
-  if (key.about = 0) and GetCursorPos(cp{%H-}) then
-  begin
-    ScreenToClient(g^.wnd, cp);
-    if (cp.x >= 0) and (cp.x < key.w) and (cp.y >= 0) and (cp.y < key.h) then
+  if (key.about = 0) and OsCursorPos(g, cx, cy) then
+    if (cx >= 0) and (cx < key.w) and (cy >= 0) and (cy < key.h) then
     begin
-      key.cursorX := cp.x;
-      key.cursorY := cp.y;
+      key.cursorX := cx;
+      key.cursorY := cy;
     end;
-  end;
 end;
-
-function EditorShowing(g: PScopeGui): Boolean;
-var
-  root: HWND;
-begin
-  Result := IsWindowVisible(g^.wnd);
-  if not Result then Exit;
-  root := GetAncestor(g^.wnd, GA_ROOT);
-  if (root <> 0) and IsIconic(root) then
-    Result := False;
-end;
-
-type
-  TDwmFlush = function: HRESULT; stdcall;
 
 function RenderThreadProc(param: Pointer): PtrInt;
 var
   g: PScopeGui;
-  swapInterval: TWglSwapIntervalEXT;
-  dwmLib: HMODULE;
-  dwmFlush: TDwmFlush;
-  swapWaits, wasShowing, due: Boolean;
+  wasShowing, due: Boolean;
   key: TFrameKey;
   now: QWord;
 begin
@@ -860,7 +821,7 @@ begin
   { FPC unmasks FPU exceptions per thread; GL drivers can't take that }
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow,
     exUnderflow, exPrecision]);
-  if not wglMakeCurrent(g^.dc, g^.glrc) then Exit;
+  if not OsRenderBegin(g) then Exit;
 
   if g^.msaa then
     glEnable(GL_MULTISAMPLE)
@@ -872,20 +833,10 @@ begin
   end;
   SetupPlasma(g);
 
-  { pace with DwmFlush: some drivers spin a core waiting for vsync in SwapBuffers }
-  dwmFlush := nil;
-  dwmLib := LoadLibraryW('dwmapi.dll');
-  if dwmLib <> 0 then
-    dwmFlush := TDwmFlush(GetProcAddress(dwmLib, 'DwmFlush'));
-  swapInterval := TWglSwapIntervalEXT(wglGetProcAddress('wglSwapIntervalEXT'));
-  swapWaits := (swapInterval <> nil) and (dwmFlush = nil);
-  if swapInterval <> nil then
-    swapInterval(Ord(swapWaits));
-
   wasShowing := False;
   while not g^.stop do
   begin
-    if not EditorShowing(g) then
+    if not OsViewShowing(g) then
     begin
       wasShowing := False;
       Sleep(HIDDEN_POLL_MS);
@@ -899,15 +850,13 @@ begin
     due := (InterlockedExchange(g^.redraw, 0) <> 0) or (key.about <> 0) or
       (not wasShowing) or (now - g^.lastDrawTick >= MAX_IDLE_MS) or
       (CompareByte(key, g^.lastKey, SizeOf(key)) <> 0);
-    if due then
+    if due and OsFrameBegin(g) then
     begin
       RenderFrame(g, key);
+      OsFrameEnd(g);
       g^.lastKey := key;
       g^.lastDrawTick := now;
       wasShowing := True;
-      if not swapWaits then
-        if (dwmFlush = nil) or (dwmFlush() < 0) then
-          Sleep(FALLBACK_FRAME_MS);
     end
     else
       Sleep(IDLE_POLL_MS);
@@ -916,9 +865,7 @@ begin
   CleanupPlasma(g);
   CleanupAboutTextures(g);
   CleanupAtlas(g);
-  wglMakeCurrent(0, 0);
-  if dwmLib <> 0 then
-    FreeLibrary(dwmLib);
+  OsRenderEnd(g);
 end;
 
 end.

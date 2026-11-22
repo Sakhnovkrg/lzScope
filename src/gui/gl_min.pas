@@ -1,15 +1,29 @@
 unit gl_min;
 
-{ Minimal OpenGL 1.1 + WGL bindings }
+{ Minimal OpenGL 1.1 bindings, plus the GL 2.0 shader entry points }
 
 {$mode objfpc}{$H+}
+{$macro on}
+
+{ glcall: the calling convention; glimport: also where the 1.1 entry points live }
+{$IF DEFINED(WINDOWS)}
+  {$DEFINE glcall := stdcall}
+  {$DEFINE glimport := stdcall; external 'opengl32.dll'}
+{$ELSE}
+  {$DEFINE glcall := cdecl}
+  {$DEFINE glimport := cdecl; external}
+  {$linkframework OpenGL}
+{$ENDIF}
 
 interface
 
-uses
-  Windows;
-
 const
+{$IF DEFINED(WINDOWS)}
+  GL_LIB = 'opengl32.dll';
+{$ELSEIF DEFINED(DARWIN)}
+  GL_LIB = '/System/Library/Frameworks/OpenGL.framework/OpenGL';
+{$ENDIF}
+
   GL_COLOR_BUFFER_BIT = $00004000;
   GL_PROJECTION       = $1701;
   GL_MODELVIEW        = $1700;
@@ -48,89 +62,94 @@ const
   GL_RGB                = $1907;
   GL_RGBA               = $1908;
 
-  { WGL_ARB_pixel_format }
-  WGL_DRAW_TO_WINDOW_ARB    = $2001;
-  WGL_ACCELERATION_ARB      = $2003;
-  WGL_SUPPORT_OPENGL_ARB    = $2010;
-  WGL_DOUBLE_BUFFER_ARB     = $2011;
-  WGL_PIXEL_TYPE_ARB        = $2013;
-  WGL_COLOR_BITS_ARB        = $2014;
-  WGL_FULL_ACCELERATION_ARB = $2027;
-  WGL_TYPE_RGBA_ARB         = $202B;
-  WGL_SAMPLE_BUFFERS_ARB    = $2041;
-  WGL_SAMPLES_ARB           = $2042;
-
-procedure glViewport(x, y, width, height: LongInt); stdcall; external 'opengl32.dll';
-procedure glClearColor(r, g, b, a: Single); stdcall; external 'opengl32.dll';
-procedure glClear(mask: DWORD); stdcall; external 'opengl32.dll';
-procedure glMatrixMode(mode: DWORD); stdcall; external 'opengl32.dll';
-procedure glLoadIdentity; stdcall; external 'opengl32.dll';
-procedure glOrtho(left, right, bottom, top, zNear, zFar: Double); stdcall; external 'opengl32.dll';
-procedure glBegin(mode: DWORD); stdcall; external 'opengl32.dll';
-procedure glEnd; stdcall; external 'opengl32.dll';
-procedure glVertex2f(x, y: Single); stdcall; external 'opengl32.dll';
-procedure glTexCoord2f(s, t: Single); stdcall; external 'opengl32.dll';
-procedure glColor4f(r, g, b, a: Single); stdcall; external 'opengl32.dll';
-procedure glLineWidth(width: Single); stdcall; external 'opengl32.dll';
-procedure glEnable(cap: DWORD); stdcall; external 'opengl32.dll';
-procedure glDisable(cap: DWORD); stdcall; external 'opengl32.dll';
-procedure glScissor(x, y, width, height: LongInt); stdcall; external 'opengl32.dll';
-procedure glBlendFunc(sfactor, dfactor: DWORD); stdcall; external 'opengl32.dll';
-procedure glHint(target, mode: DWORD); stdcall; external 'opengl32.dll';
+procedure glViewport(x, y, width, height: LongInt); glimport;
+procedure glClearColor(r, g, b, a: Single); glimport;
+procedure glClear(mask: DWord); glimport;
+procedure glMatrixMode(mode: DWord); glimport;
+procedure glLoadIdentity; glimport;
+procedure glOrtho(left, right, bottom, top, zNear, zFar: Double); glimport;
+procedure glBegin(mode: DWord); glimport;
+procedure glEnd; glimport;
+procedure glVertex2f(x, y: Single); glimport;
+procedure glTexCoord2f(s, t: Single); glimport;
+procedure glColor4f(r, g, b, a: Single); glimport;
+procedure glLineWidth(width: Single); glimport;
+procedure glEnable(cap: DWord); glimport;
+procedure glDisable(cap: DWord); glimport;
+procedure glScissor(x, y, width, height: LongInt); glimport;
+procedure glBlendFunc(sfactor, dfactor: DWord); glimport;
+procedure glHint(target, mode: DWord); glimport;
 
 { textures }
-procedure glGenTextures(n: LongInt; textures: PDWORD); stdcall; external 'opengl32.dll';
-procedure glDeleteTextures(n: LongInt; textures: PDWORD); stdcall; external 'opengl32.dll';
-procedure glBindTexture(target, texture: DWORD); stdcall; external 'opengl32.dll';
-procedure glTexImage2D(target: DWORD; level, internalformat, width, height,
-  border: LongInt; format, atype: DWORD; pixels: Pointer); stdcall; external 'opengl32.dll';
-procedure glTexParameteri(target, pname: DWORD; param: LongInt); stdcall; external 'opengl32.dll';
-procedure glCopyTexSubImage2D(target: DWORD; level, xoffset, yoffset,
-  x, y, width, height: LongInt); stdcall; external 'opengl32.dll';
+procedure glGenTextures(n: LongInt; textures: PDWord); glimport;
+procedure glDeleteTextures(n: LongInt; textures: PDWord); glimport;
+procedure glBindTexture(target, texture: DWord); glimport;
+procedure glTexImage2D(target: DWord; level, internalformat, width, height,
+  border: LongInt; format, atype: DWord; pixels: Pointer); glimport;
+procedure glTexParameteri(target, pname: DWord; param: LongInt); glimport;
+procedure glCopyTexSubImage2D(target: DWord; level, xoffset, yoffset,
+  x, y, width, height: LongInt); glimport;
 
 { vertex arrays }
-procedure glEnableClientState(cap: DWORD); stdcall; external 'opengl32.dll';
-procedure glDisableClientState(cap: DWORD); stdcall; external 'opengl32.dll';
-procedure glVertexPointer(size: LongInt; atype: DWORD; stride: LongInt;
-  data: Pointer); stdcall; external 'opengl32.dll';
-procedure glColorPointer(size: LongInt; atype: DWORD; stride: LongInt;
-  data: Pointer); stdcall; external 'opengl32.dll';
-procedure glDrawArrays(mode: DWORD; first, count: LongInt); stdcall; external 'opengl32.dll';
-
-function wglCreateContext(dc: HDC): HGLRC; stdcall; external 'opengl32.dll';
-function wglDeleteContext(rc: HGLRC): BOOL; stdcall; external 'opengl32.dll';
-function wglMakeCurrent(dc: HDC; rc: HGLRC): BOOL; stdcall; external 'opengl32.dll';
-function wglGetProcAddress(name: PAnsiChar): Pointer; stdcall; external 'opengl32.dll';
+procedure glEnableClientState(cap: DWord); glimport;
+procedure glDisableClientState(cap: DWord); glimport;
+procedure glVertexPointer(size: LongInt; atype: DWord; stride: LongInt;
+  data: Pointer); glimport;
+procedure glColorPointer(size: LongInt; atype: DWord; stride: LongInt;
+  data: Pointer); glimport;
+procedure glDrawArrays(mode: DWord; first, count: LongInt); glimport;
 
 type
-  { WGL_EXT_swap_control }
-  TWglSwapIntervalEXT = function(interval: Integer): BOOL; stdcall;
+  { GL 2.0 shaders, loaded at run time }
+  TglCreateShader = function(shaderType: DWord): DWord; glcall;
+  TglShaderSource = procedure(shader: DWord; count: LongInt;
+    src: PPAnsiChar; lengths: PLongInt); glcall;
+  TglCompileShader = procedure(shader: DWord); glcall;
+  TglGetShaderiv = procedure(shader: DWord; pname: DWord;
+    params: PLongInt); glcall;
+  TglCreateProgram = function: DWord; glcall;
+  TglAttachShader = procedure(prog, shader: DWord); glcall;
+  TglLinkProgram = procedure(prog: DWord); glcall;
+  TglGetProgramiv = procedure(prog: DWord; pname: DWord;
+    params: PLongInt); glcall;
+  TglUseProgram = procedure(prog: DWord); glcall;
+  TglGetUniformLocation = function(prog: DWord; name: PAnsiChar): LongInt; glcall;
+  TglUniform1f = procedure(loc: LongInt; v: Single); glcall;
+  TglUniform2f = procedure(loc: LongInt; x, y: Single); glcall;
+  TglUniform1i = procedure(loc: LongInt; v: LongInt); glcall;
+  TglDeleteShader = procedure(shader: DWord); glcall;
+  TglDeleteProgram = procedure(prog: DWord); glcall;
 
-  { WGL_ARB_pixel_format }
-  TWglChoosePixelFormatARB = function(dc: HDC; piAttribIList: PLongInt;
-    pfAttribFList: PSingle; nMaxFormats: UINT; piFormats: PLongInt;
-    nNumFormats: PUINT): BOOL; stdcall;
-
-  { GL 2.0 shaders }
-  TglCreateShader = function(shaderType: DWORD): DWORD; stdcall;
-  TglShaderSource = procedure(shader: DWORD; count: LongInt;
-    src: PPAnsiChar; lengths: PLongInt); stdcall;
-  TglCompileShader = procedure(shader: DWORD); stdcall;
-  TglGetShaderiv = procedure(shader: DWORD; pname: DWORD;
-    params: PLongInt); stdcall;
-  TglCreateProgram = function: DWORD; stdcall;
-  TglAttachShader = procedure(prog, shader: DWORD); stdcall;
-  TglLinkProgram = procedure(prog: DWORD); stdcall;
-  TglGetProgramiv = procedure(prog: DWORD; pname: DWORD;
-    params: PLongInt); stdcall;
-  TglUseProgram = procedure(prog: DWORD); stdcall;
-  TglGetUniformLocation = function(prog: DWORD; name: PAnsiChar): LongInt; stdcall;
-  TglUniform1f = procedure(loc: LongInt; v: Single); stdcall;
-  TglUniform2f = procedure(loc: LongInt; x, y: Single); stdcall;
-  TglUniform1i = procedure(loc: LongInt; v: LongInt); stdcall;
-  TglDeleteShader = procedure(shader: DWORD); stdcall;
-  TglDeleteProgram = procedure(prog: DWORD); stdcall;
+{ an extension or post-1.1 entry point; needs a current context on Windows }
+function GetGLProc(name: PAnsiChar): Pointer;
 
 implementation
+
+{$IF DEFINED(WINDOWS)}
+
+function wglGetProcAddress(name: PAnsiChar): Pointer; stdcall; external GL_LIB;
+
+function GetGLProc(name: PAnsiChar): Pointer;
+begin
+  Result := wglGetProcAddress(name);
+end;
+
+{$ELSEIF DEFINED(DARWIN)}
+
+uses
+  dynlibs;
+
+var
+  GLLib: TLibHandle = NilHandle;
+
+{ the framework exports everything up to GL 2.1 directly }
+function GetGLProc(name: PAnsiChar): Pointer;
+begin
+  if GLLib = NilHandle then
+    GLLib := LoadLibrary(GL_LIB);
+  Result := GetProcedureAddress(GLLib, name);
+end;
+
+{$ENDIF}
 
 end.

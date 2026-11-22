@@ -1,6 +1,6 @@
 unit scope_gui_text;
 
-{ Text: GDI rasterizes, GL draws textured quads. Render thread only. }
+{ Text: the platform rasterizes, GL draws textured quads. Render thread only. }
 
 {$mode objfpc}{$H+}
 {$pointermath on}
@@ -10,12 +10,16 @@ interface
 uses
   scope_gui_types;
 
+const
+  ABOUT_CREDITS = 5;   { about lines before the shortcuts }
+
 procedure BuildAtlas(g: PScopeGui; heightPx: Integer);
 procedure CleanupAtlas(g: PScopeGui);
 { (x, y) = baseline; set the color first }
 procedure DrawTextGL(g: PScopeGui; x, y: Single; const s: ShortString);
 function TextWidth(g: PScopeGui; const s: ShortString): Single;
 
+function AboutText(idx: Integer): ShortString;
 procedure BuildAboutTextures(g: PScopeGui);
 procedure CleanupAboutTextures(g: PScopeGui);
 function AboutLineW(g: PScopeGui; idx: Integer; const s: ShortString): Single;
@@ -26,100 +30,29 @@ procedure DrawAboutLine(g: PScopeGui; idx: Integer; const s: ShortString;
 implementation
 
 uses
-  Windows, gl_min, scope_state;
-
-const
-  FONT_NAME: PWideChar = 'Consolas';
-
-type
-  { memory DC + DIB with a font selected }
-  TGdiCanvas = record
-    dc: HDC;
-    font: HFONT;
-    dib: HBITMAP;
-    oldFont, oldBmp: HGDIOBJ;
-    bits: PByte;
-    w, h: Integer;
-  end;
-
-function OpenFontDC(var c: TGdiCanvas; heightPx: Integer; bold: Boolean): Boolean;
-var
-  weight: Integer;
-begin
-  FillChar(c, SizeOf(c), 0);
-  Result := False;
-  c.dc := CreateCompatibleDC(0);
-  if c.dc = 0 then Exit;
-  weight := FW_NORMAL;
-  if bold then weight := FW_BOLD;
-  c.font := CreateFontW(-heightPx, 0, 0, 0, weight, 0, 0, 0,
-    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-    ANTIALIASED_QUALITY, FIXED_PITCH or FF_DONTCARE, FONT_NAME);
-  if c.font = 0 then
-  begin
-    DeleteDC(c.dc);
-    c.dc := 0;
-    Exit;
-  end;
-  c.oldFont := SelectObject(c.dc, c.font);
-  Result := True;
-end;
-
-function AttachBitmap(var c: TGdiCanvas; w, h: Integer): Boolean;
-var
-  bi: BITMAPINFO;
-  bits: Pointer;
-begin
-  FillChar(bi{%H-}, SizeOf(bi), 0);
-  bi.bmiHeader.biSize := SizeOf(BITMAPINFOHEADER);
-  bi.bmiHeader.biWidth := w;
-  bi.bmiHeader.biHeight := -h;   { top-down }
-  bi.bmiHeader.biPlanes := 1;
-  bi.bmiHeader.biBitCount := 32;
-  bi.bmiHeader.biCompression := BI_RGB;
-  bits := nil;
-  c.dib := CreateDIBSection(c.dc, bi, DIB_RGB_COLORS, bits, 0, 0);
-  Result := (c.dib <> 0) and (bits <> nil);
-  if not Result then Exit;
-  c.bits := bits;
-  c.w := w;
-  c.h := h;
-  c.oldBmp := SelectObject(c.dc, c.dib);
-  SetBkMode(c.dc, TRANSPARENT);
-  SetTextColor(c.dc, $FFFFFF);
-end;
-
-procedure CloseCanvas(var c: TGdiCanvas);
-begin
-  if c.dc = 0 then Exit;
-  if c.oldBmp <> 0 then SelectObject(c.dc, c.oldBmp);
-  if c.oldFont <> 0 then SelectObject(c.dc, c.oldFont);
-  if c.dib <> 0 then DeleteObject(c.dib);
-  if c.font <> 0 then DeleteObject(c.font);
-  DeleteDC(c.dc);
-  c.dc := 0;
-end;
+  gl_min, scope_state, scope_gui_os;
 
 { white texture, coverage as alpha; 0 on failure }
-function UploadCanvas(var c: TGdiCanvas): DWORD;
+function UploadCoverage(t: TOsText; w, h: Integer): DWord;
 var
-  buf: PByte;
+  cov, buf: PByte;
   i: Integer;
 begin
   Result := 0;
-  GdiFlush;
-  buf := GetMem(c.w * c.h * 4);
+  cov := OsTextCoverage(t);
+  if cov = nil then Exit;
+  buf := GetMem(w * h * 4);
   if buf = nil then Exit;
-  for i := 0 to c.w * c.h - 1 do
+  for i := 0 to w * h - 1 do
   begin
     buf[i * 4 + 0] := 255;
     buf[i * 4 + 1] := 255;
     buf[i * 4 + 2] := 255;
-    buf[i * 4 + 3] := c.bits[i * 4 + 1];
+    buf[i * 4 + 3] := cov[i];
   end;
   glGenTextures(1, @Result);
   glBindTexture(GL_TEXTURE_2D, Result);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, c.w, c.h, 0, GL_RGBA,
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA,
     GL_UNSIGNED_BYTE, buf);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -139,44 +72,38 @@ end;
 
 procedure BuildAtlas(g: PScopeGui; heightPx: Integer);
 var
-  c: TGdiCanvas;
-  tm: TEXTMETRICA;
-  sz: Windows.TSize;
-  ch: AnsiChar;
-  i, maxAdv: Integer;
+  t: TOsText;
+  ch: AnsiString;
+  i, maxAdv, ascent, height: Integer;
 begin
   CleanupAtlas(g);
   g^.fontH := heightPx;   { also on failure: no retry every frame }
-  if not OpenFontDC(c, heightPx, False) then Exit;
+  t := OsTextOpen(heightPx, False);
+  if t = nil then Exit;
 
-  GetTextMetricsA(c.dc, @tm);
+  OsTextMetrics(t, ascent, height);
   maxAdv := 1;
   for i := 0 to ATLAS_COUNT - 1 do
   begin
     ch := AnsiChar(ATLAS_FIRST + i);
-    sz.cx := 0;
-    GetTextExtentPoint32A(c.dc, @ch, 1, @sz);
-    g^.atlas.adv[i] := sz.cx;
-    if sz.cx > maxAdv then maxAdv := sz.cx;
+    g^.atlas.adv[i] := OsTextWidth(t, ch);
+    if g^.atlas.adv[i] > maxAdv then maxAdv := g^.atlas.adv[i];
   end;
   { 1 px padding against filter bleed }
   g^.atlas.cellW := maxAdv + 2;
-  g^.atlas.cellH := tm.tmHeight + 2;
-  g^.atlas.ascent := tm.tmAscent + 1;
+  g^.atlas.cellH := height + 2;
+  g^.atlas.ascent := ascent + 1;
   g^.atlas.texW := ATLAS_COLS * g^.atlas.cellW;
   g^.atlas.texH := ((ATLAS_COUNT + ATLAS_COLS - 1) div ATLAS_COLS) * g^.atlas.cellH;
 
-  if AttachBitmap(c, g^.atlas.texW, g^.atlas.texH) then
+  if OsTextCanvas(t, g^.atlas.texW, g^.atlas.texH) then
   begin
     for i := 0 to ATLAS_COUNT - 1 do
-    begin
-      ch := AnsiChar(ATLAS_FIRST + i);
-      TextOutA(c.dc, (i mod ATLAS_COLS) * g^.atlas.cellW + 1,
-        (i div ATLAS_COLS) * g^.atlas.cellH + 1, @ch, 1);
-    end;
-    g^.atlas.tex := UploadCanvas(c);
+      OsTextDraw(t, (i mod ATLAS_COLS) * g^.atlas.cellW + 1,
+        (i div ATLAS_COLS) * g^.atlas.cellH + 1, AnsiChar(ATLAS_FIRST + i));
+    g^.atlas.tex := UploadCoverage(t, g^.atlas.texW, g^.atlas.texH);
   end;
-  CloseCanvas(c);
+  OsTextClose(t);
 end;
 
 function TextWidth(g: PScopeGui; const s: ShortString): Single;
@@ -228,28 +155,57 @@ end;
 
 { about overlay lines }
 
-procedure BuildTextTexture(g: PScopeGui; const s: AnsiString; bold: Boolean;
-  var t: TTextTex);
-var
-  c: TGdiCanvas;
-  sz: Windows.TSize;
-  tm: TEXTMETRICA;
+{ "keys ...... action", lined up on the right }
+function ShortcutLine(const keys, action: ShortString): ShortString;
+const
+  WIDTH = 29;
 begin
-  t.tex := 0;
-  if not OpenFontDC(c, g^.fontH, bold) then Exit;
-  sz.cx := 0;
-  sz.cy := 0;
-  GetTextExtentPoint32A(c.dc, PAnsiChar(s), Length(s), @sz);
-  GetTextMetricsA(c.dc, @tm);
-  if AttachBitmap(c, sz.cx + 2, sz.cy + 2) then
-  begin
-    TextOutA(c.dc, 1, 1, PAnsiChar(s), Length(s));
-    t.tex := UploadCanvas(c);
-    t.w := c.w;
-    t.h := c.h;
-    t.ascent := tm.tmAscent + 1;   { +1 = padding row }
+  Result := keys + ' ';
+  while Length(Result) < WIDTH - Length(action) - 1 do
+    Result := Result + '.';
+  Result := Result + ' ' + action;
+end;
+
+function AboutText(idx: Integer): ShortString;
+begin
+  case idx of
+    0: Result := 'lzScope v' + PLUGIN_VERSION;
+    1: Result := 'created by ' + PLUGIN_AUTHOR;
+    2: Result := PLUGIN_URL;
+    3: Result := 'built with Free Pascal & Lazarus';
+    4: Result := 'inspired by the Cockos JSFX Oscilloscope Meter';
+    5: Result := ShortcutLine('wheel', 'time zoom');
+    6: Result := ShortcutLine(OS_VZOOM_KEY + '+wheel', 'v-zoom');
+    7: Result := ShortcutLine('click', 'hold');
+    8: Result := ShortcutLine('drag while hold', 'scrub');
+    9: Result := ShortcutLine('right-click', 'trigger mode');
+    10: Result := ShortcutLine('drag len/range', 'adjust');
+    11: Result := ShortcutLine('double-click', 'reset');
+  else
+    Result := '';
   end;
-  CloseCanvas(c);
+end;
+
+procedure BuildTextTexture(g: PScopeGui; const s: AnsiString; bold: Boolean;
+  var tt: TTextTex);
+var
+  t: TOsText;
+  ascent, height, w: Integer;
+begin
+  tt.tex := 0;
+  t := OsTextOpen(g^.fontH, bold);
+  if t = nil then Exit;
+  OsTextMetrics(t, ascent, height);
+  w := OsTextWidth(t, s);
+  if OsTextCanvas(t, w + 2, height + 2) then
+  begin
+    OsTextDraw(t, 1, 1, s);
+    tt.tex := UploadCoverage(t, w + 2, height + 2);
+    tt.w := w + 2;
+    tt.h := height + 2;
+    tt.ascent := ascent + 1;   { +1 = padding row }
+  end;
+  OsTextClose(t);
 end;
 
 procedure CleanupAboutTextures(g: PScopeGui);
@@ -266,22 +222,13 @@ begin
 end;
 
 procedure BuildAboutTextures(g: PScopeGui);
+var
+  i: Integer;
 begin
   if g^.aboutTexFontH = g^.fontH then Exit;
   CleanupAboutTextures(g);
-  BuildTextTexture(g, 'lzScope v' + PLUGIN_VERSION, True, g^.aboutTex[0]);
-  BuildTextTexture(g, 'created by ' + PLUGIN_AUTHOR, False, g^.aboutTex[1]);
-  BuildTextTexture(g, PLUGIN_URL, False, g^.aboutTex[2]);
-  BuildTextTexture(g, 'built with Free Pascal & Lazarus', False, g^.aboutTex[3]);
-  BuildTextTexture(g, 'inspired by the Cockos JSFX Oscilloscope Meter',
-    False, g^.aboutTex[4]);
-  BuildTextTexture(g, 'wheel ............. time zoom', False, g^.aboutTex[5]);
-  BuildTextTexture(g, 'ctrl+wheel ........... v-zoom', False, g^.aboutTex[6]);
-  BuildTextTexture(g, 'click .................. hold', False, g^.aboutTex[7]);
-  BuildTextTexture(g, 'drag while hold ....... scrub', False, g^.aboutTex[8]);
-  BuildTextTexture(g, 'right-click .... trigger mode', False, g^.aboutTex[9]);
-  BuildTextTexture(g, 'drag len/range ....... adjust', False, g^.aboutTex[10]);
-  BuildTextTexture(g, 'double-click .......... reset', False, g^.aboutTex[11]);
+  for i := 0 to ABOUT_LINES - 1 do
+    BuildTextTexture(g, AboutText(i), i = 0, g^.aboutTex[i]);
   g^.aboutTexFontH := g^.fontH;
 end;
 
