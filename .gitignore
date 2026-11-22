@@ -16,6 +16,7 @@ backup/
 *.dylib
 *.clap
 tests/testhost
+tests/testhost-x86_64
 
 # --- editor/IDE leftovers ---
 *.bak
@@ -27,3 +28,6 @@ fpcdebug.txt
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# --- release archives ---
+dist/

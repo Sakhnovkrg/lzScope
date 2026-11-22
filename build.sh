@@ -6,12 +6,17 @@
 # Toolchain lookup: $LAZBUILD / $FPC if set, then PATH. A Lazarus that is
 # not on PATH, e.g. in your shell profile:
 #   export LAZBUILD="$HOME/lazarus/lazbuild"
+#
+# Universal (arm64 + x86_64) when the cross compiler from
+# tools/setup-x86_64.sh is in $X64_ROOT (default ~/.fpc/x86_64-darwin);
+# arm64 only otherwise.
 
 set -eu
 cd "$(dirname "$0")"
 
 FPC=${FPC:-$(command -v fpc || true)}
 LAZBUILD=${LAZBUILD:-$(command -v lazbuild || true)}
+X64_ROOT=${X64_ROOT:-$HOME/.fpc/x86_64-darwin}
 
 if [ -z "$LAZBUILD" ] && [ -z "$FPC" ]; then
     echo 'Neither lazbuild nor fpc found. Install Free Pascal (brew install fpc) or set LAZBUILD / FPC.' >&2
@@ -33,12 +38,44 @@ build_project() {
     fi
 }
 
+# build_x86_64 <lpr> <output> <unit dirs...>
+build_x86_64() {
+    lpr=$1; output=$2; shift 2
+    out="$(dirname "$lpr")/lib/x86_64-darwin"
+    mkdir -p "$out"
+    fu=''
+    for d in "$@"; do fu="$fu -Fu$d"; done
+    # shellcheck disable=SC2086
+    # 10.13: what Intel CLAP hosts need anyway; the code itself needs 10.9
+    "$X64_ROOT/bin/ppcx64" -n -B -Tdarwin -Px86_64 -O2 -CX -XX -Xs -WM10.13 \
+        "-XR$(xcrun --show-sdk-path)" \
+        "-Fu$X64_ROOT/units/rtl" "-Fu$X64_ROOT/units/packages" \
+        "-FU$out" $fu "-o$output" "$lpr"
+}
+
 build_project lzscope.lpi lzscope.lpr src/clap src/dsp src/gui src/plugin
 build_project tests/testhost.lpi tests/testhost.lpr src/clap src/dsp
+
+universal=false
+if [ -x "$X64_ROOT/bin/ppcx64" ]; then
+    build_x86_64 lzscope.lpr liblzscope-x86_64.dylib src/clap src/dsp src/gui src/plugin
+    build_x86_64 tests/testhost.lpr tests/testhost-x86_64 src/clap src/dsp
+    lipo -create liblzscope.dylib liblzscope-x86_64.dylib -output liblzscope-universal.dylib
+    mv liblzscope-universal.dylib liblzscope.dylib
+    rm liblzscope-x86_64.dylib
+    universal=true
+fi
 
 if ! ./tests/testhost; then
     echo 'tests failed, not installing'
     exit 1
+fi
+# the Intel half runs under Rosetta, when it is installed
+if $universal && arch -x86_64 /usr/bin/true 2>/dev/null; then
+    if ! arch -x86_64 ./tests/testhost-x86_64; then
+        echo 'x86_64 tests failed, not installing'
+        exit 1
+    fi
 fi
 
 # lzScope.clap/Contents/{Info.plist, MacOS/lzScope}
