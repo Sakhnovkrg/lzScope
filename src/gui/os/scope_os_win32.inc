@@ -120,7 +120,9 @@ begin
       if g <> nil then
       begin
         InputPress(g, mx, my, msg = WM_LBUTTONDBLCLK);
-        SetCapture(hw);
+        { a double-click reset starts nothing to capture for }
+        if InputActive(g) then
+          SetCapture(hw);
         Exit(0);
       end;
     WM_MOUSEMOVE:

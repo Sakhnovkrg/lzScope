@@ -2,13 +2,11 @@
 
 ## 1.1.0 — unreleased
 
+- macOS version
 - Sync mode: the view is locked to the host bars, from 1/4 bar to 8 bars
 - Split view: left and right channels in separate lanes
 - Red 0 dB lines when the range goes above 0 dB
 - Correct size and look at any UI scale
-- Window can no longer be made narrower than the status line
-- macOS version (Apple Silicon): Retina, trackpad scrolling, cmd+wheel v-zoom,
-  control-click as right-click
 
 ## 1.0.1 — 2026-11-22
 

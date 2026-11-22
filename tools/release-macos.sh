@@ -1,7 +1,7 @@
 #!/bin/sh
 # macOS release: the universal bundle from build.sh, signed with a Developer
 # ID, notarized and stapled, zipped for the GitHub release into
-# dist/lzScope-<version>-macos.zip. Also replaces the ad-hoc signed copy
+# dist/lzScope-CLAP-<version>-macos.zip. Also replaces the ad-hoc signed copy
 # build.sh installed.
 #
 #   tools/release-macos.sh
@@ -58,7 +58,7 @@ xcrun stapler validate "$bundle"
 
 version=$(sed -n "s/.*PLUGIN_VERSION *= *'\(.*\)';.*/\1/p" src/dsp/scope_state.pas)
 mkdir -p dist
-zip="dist/lzScope-$version-macos.zip"
+zip="dist/lzScope-CLAP-$version-macos.zip"
 rm -f "$zip"
 ditto -c -k --keepParent "$bundle" "$zip"
 
