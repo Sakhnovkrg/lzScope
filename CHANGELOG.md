@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — unreleased
+## 1.1.0 — 2026-11-22
 
 - macOS version
 - Sync mode: the view is locked to the host bars, from 1/4 bar to 8 bars
